@@ -973,7 +973,7 @@
         state.book.bids = bids;
         state.book.asks = asks;
         state.book.lastUpdateId = num(snap.lastUpdateId);
-        state.book.previousU = state.book.lastUpdateId;
+        state.book.previousU = 0;
         state.book.synced = true;
         state.book.syncing = false;
         state.book.lastEventAt = Date.now();
@@ -1000,14 +1000,15 @@
       var buffer = state.book.buffer.slice();
       state.book.buffer.length = 0;
       var started = false;
+      var snapshotId = state.book.lastUpdateId;
       for (var i = 0; i < buffer.length; i++) {
         var evt = buffer[i];
-        if (evt.u < state.book.lastUpdateId) continue;
+        if (evt.u < snapshotId) continue;
         if (!started) {
-          if (evt.U > state.book.lastUpdateId + 1 || evt.u < state.book.lastUpdateId) continue;
+          var targetId = snapshotId + 1;
+          if (evt.U > targetId || evt.u < targetId) continue;
           started = true;
-        }
-        if (state.book.previousU && evt.pu && evt.pu !== state.book.previousU) {
+        } else if (state.book.previousU && evt.pu && evt.pu !== state.book.previousU) {
           requestBookResync("盘口序列断裂");
           return;
         }
@@ -1024,6 +1025,20 @@
       if (state.book.syncing || !state.book.synced) {
         state.book.buffer.push(evt);
         if (state.book.buffer.length > 5000) state.book.buffer.splice(0, 2500);
+        return;
+      }
+      if (!state.book.previousU) {
+        if (evt.u < state.book.lastUpdateId) return;
+        var firstTargetId = state.book.lastUpdateId + 1;
+        if (evt.U > firstTargetId || evt.u < firstTargetId) {
+          requestBookResync("盘口首次增量未衔接");
+          return;
+        }
+        applyDepthLevels(state.book.bids, evt.b || []);
+        applyDepthLevels(state.book.asks, evt.a || []);
+        state.book.previousU = evt.u;
+        state.book.lastUpdateId = evt.u;
+        trimBook();
         return;
       }
       if (state.book.previousU && evt.pu && evt.pu !== state.book.previousU) {
