@@ -1189,8 +1189,16 @@
       };
       var list = state.candles1m;
       var last = list[list.length - 1];
-      if (last && last.t === candle.t) list[list.length - 1] = candle;
-      else {
+      var existingIndex = -1;
+      for (var i = list.length - 1; i >= Math.max(0, list.length - 12); i--) {
+        if (list[i].t === candle.t) {
+          existingIndex = i;
+          break;
+        }
+      }
+      if (existingIndex >= 0) {
+        list[existingIndex] = candle;
+      } else if (!last || candle.t > last.t) {
         list.push(candle);
         if (list.length > 1600) list.splice(0, list.length - 1600);
       }
