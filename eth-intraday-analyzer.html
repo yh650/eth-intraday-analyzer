@@ -1,0 +1,2477 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="color-scheme" content="dark">
+  <title>ETH Analyzer — 日内合约多空分析</title>
+  <style>
+    :root {
+      --bg: #0b0e11;
+      --bg-soft: #101319;
+      --panel: #0f1218;
+      --panel-2: #131720;
+      --line: #242936;
+      --line-soft: rgba(255,255,255,.07);
+      --text: #f4f7fb;
+      --muted: #8b93a7;
+      --green: #00f5a0;
+      --green-soft: rgba(0,245,160,.14);
+      --red: #ff416c;
+      --red-soft: rgba(255,65,108,.14);
+      --blue: #4c9dff;
+      --yellow: #f5c451;
+      --orange: #ff8a4c;
+      --header-h: 46px;
+      --panel-w: clamp(330px, 25vw, 420px);
+      font-family: Inter, "SF Pro Display", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
+    body { -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+    button, select, input { font: inherit; color: inherit; }
+    button { border: 0; }
+    .mono { font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; }
+    .hidden { display: none !important; }
+
+    #app {
+      width: 100%;
+      height: 100dvh;
+      min-height: 420px;
+      background:
+        radial-gradient(circle at 72% -20%, rgba(76,157,255,.08), transparent 32%),
+        var(--bg);
+    }
+
+    .topbar {
+      height: var(--header-h);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 10px;
+      background: #0d1015;
+      border-bottom: 1px solid var(--line);
+      position: relative;
+      z-index: 20;
+      user-select: none;
+    }
+
+    .brand {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-weight: 700;
+      letter-spacing: .01em;
+      white-space: nowrap;
+    }
+
+    .brand-mark {
+      width: 20px;
+      height: 20px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(0,245,160,.4);
+      color: var(--green);
+      background: rgba(0,245,160,.07);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 12px;
+      box-shadow: inset 0 0 12px rgba(0,245,160,.08);
+    }
+
+    .brand-title { overflow: hidden; text-overflow: ellipsis; }
+    .top-price {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding-left: 4px;
+      min-width: 155px;
+    }
+    .top-price strong { font-size: 15px; }
+    .top-price span { font-size: 11px; color: var(--muted); }
+    .top-price .up { color: var(--green); }
+    .top-price .down { color: var(--red); }
+    .top-spacer { flex: 1; }
+
+    .connection {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--yellow);
+      box-shadow: 0 0 8px currentColor;
+    }
+    .status-dot.live { color: var(--green); background: var(--green); }
+    .status-dot.degraded { color: var(--yellow); background: var(--yellow); }
+    .status-dot.offline { color: var(--red); background: var(--red); }
+
+    .top-action {
+      height: 31px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 10px;
+      border-radius: 5px;
+      background: #171b25;
+      border: 1px solid #272d3b;
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+      transition: border-color .15s, background .15s, color .15s;
+    }
+    .top-action:hover { border-color: #3b4559; background: #1b202c; }
+    .top-action.active { background: rgba(76,157,255,.15); border-color: rgba(76,157,255,.55); color: #8ec2ff; }
+
+    .workspace {
+      height: calc(100dvh - var(--header-h));
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) var(--panel-w);
+      overflow: hidden;
+    }
+
+    .chart-side {
+      min-width: 0;
+      min-height: 0;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      background: #0c0f14;
+    }
+
+    .chart-toolbar {
+      height: 38px;
+      flex: 0 0 38px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(13,16,21,.95);
+      user-select: none;
+      overflow: hidden;
+    }
+
+    .tf-group { display: flex; align-items: center; gap: 3px; }
+    .tf-btn {
+      min-width: 37px;
+      height: 25px;
+      padding: 0 7px;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .tf-btn:hover { color: var(--text); background: rgba(255,255,255,.05); }
+    .tf-btn.active { color: #fff; background: rgba(76,157,255,.2); border: 1px solid rgba(76,157,255,.36); }
+    .toolbar-divider { width: 1px; height: 18px; background: var(--line); }
+    .ohlc {
+      min-width: 0;
+      display: flex;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 10px;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .ohlc b { color: #c5cbd7; font-weight: 500; }
+    .toolbar-note { margin-left: auto; color: var(--muted); font-size: 10px; white-space: nowrap; }
+
+    .chart-wrap {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+      touch-action: none;
+      background:
+        linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px),
+        #0b0e13;
+      background-size: 28px 28px;
+    }
+    #chartCanvas { width: 100%; height: 100%; display: block; }
+
+    .chart-loading, .chart-warning {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      padding: 12px 16px;
+      border: 1px solid var(--line);
+      background: rgba(12,15,20,.88);
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      pointer-events: none;
+      backdrop-filter: blur(5px);
+    }
+    .chart-warning { top: 14px; transform: translateX(-50%); color: var(--yellow); }
+
+    .legend {
+      position: absolute;
+      left: 10px;
+      top: 8px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 10px;
+      pointer-events: none;
+    }
+    .legend-item::before {
+      content: "";
+      display: inline-block;
+      width: 12px;
+      height: 2px;
+      margin-right: 5px;
+      vertical-align: middle;
+      background: currentColor;
+    }
+    .legend-ema21 { color: #f2c14e; }
+    .legend-ema50 { color: #a06cff; }
+    .legend-vwap { color: #4c9dff; }
+    .chart-hint {
+      position: absolute;
+      right: 66px;
+      bottom: 7px;
+      color: rgba(139,147,167,.55);
+      font-size: 9px;
+      pointer-events: none;
+    }
+
+    .signal-panel {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+      overflow: hidden;
+      position: relative;
+      z-index: 12;
+    }
+
+    .mobile-handle { display: none; }
+
+    .panel-head {
+      height: 48px;
+      flex: 0 0 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .panel-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; }
+    .bars-icon { display: flex; gap: 2px; height: 15px; align-items: flex-end; }
+    .bars-icon i { width: 3px; display: block; }
+    .bars-icon i:nth-child(1) { height: 9px; background: var(--green); }
+    .bars-icon i:nth-child(2) { height: 14px; background: var(--blue); }
+    .bars-icon i:nth-child(3) { height: 6px; background: var(--red); }
+    .period-tag { padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; color: #cdd3df; background: #171b25; font-size: 11px; }
+
+    .signal-main {
+      padding: 13px 12px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: center;
+    }
+    .score-row { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+    .score-bar { height: 7px; flex: 1; border-radius: 8px; overflow: hidden; background: #1a1e27; }
+    .score-fill { width: 0%; height: 100%; background: var(--blue); transition: width .4s ease, background .25s; box-shadow: 0 0 12px currentColor; }
+    .score-value { width: 32px; font-size: 11px; color: var(--muted); text-align: right; }
+
+    .signal-state {
+      font-size: clamp(22px, 2.1vw, 30px);
+      font-weight: 800;
+      letter-spacing: .02em;
+      margin: 2px 0 5px;
+      text-shadow: 0 0 16px rgba(76,157,255,.2);
+    }
+    .signal-state.buy { color: var(--green); text-shadow: 0 0 18px rgba(0,245,160,.25); }
+    .signal-state.sell { color: var(--red); text-shadow: 0 0 18px rgba(255,65,108,.25); }
+    .signal-state.exit { color: var(--red); animation: dangerPulse .7s infinite alternate; }
+    @keyframes dangerPulse { from { opacity: .62; } to { opacity: 1; text-shadow: 0 0 22px rgba(255,65,108,.75); } }
+
+    .market-line { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
+    .market-chip {
+      padding: 3px 7px;
+      border-radius: 3px;
+      font-size: 10px;
+      color: #bdc4d2;
+      background: #171b24;
+      border: 1px solid #252b38;
+    }
+    .market-chip.trend { color: #86bdff; border-color: rgba(76,157,255,.38); }
+    .market-chip.range { color: #f5d27a; border-color: rgba(245,196,81,.35); }
+    .market-chip.danger { color: #ff879f; border-color: rgba(255,65,108,.4); }
+
+    .confidence-line { color: var(--muted); font-size: 12px; }
+    .confidence-line strong { color: #dce2ed; font-weight: 600; }
+
+    .levels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      margin-top: 11px;
+      background: var(--line-soft);
+      border: 1px solid var(--line-soft);
+    }
+    .level {
+      min-width: 0;
+      padding: 7px 8px;
+      background: var(--panel);
+      text-align: left;
+    }
+    .level label { display: block; color: var(--muted); font-size: 9px; margin-bottom: 3px; }
+    .level strong { display: block; font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; color: #e4e8f0; overflow: hidden; text-overflow: ellipsis; }
+    .level.tp strong, .level.runner strong { color: var(--green); }
+    .level.stop strong, .level.invalid strong { color: #ff718d; }
+    .levels.danger { animation: levelDanger .6s infinite alternate; }
+    @keyframes levelDanger {
+      from { border-color: rgba(255,65,108,.25); }
+      to { border-color: rgba(255,65,108,.95); box-shadow: 0 0 18px rgba(255,65,108,.22); }
+    }
+
+    .flow-strip {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--line-soft);
+      border-bottom: 1px solid var(--line);
+    }
+    .flow-cell { padding: 8px 7px; background: #0e1117; min-width: 0; }
+    .flow-cell span { display: block; color: var(--muted); font-size: 9px; margin-bottom: 3px; }
+    .flow-cell b { display: block; font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .positive { color: var(--green) !important; }
+    .negative { color: var(--red) !important; }
+    .neutral { color: #cbd1dc !important; }
+
+    .reason-box {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line);
+      color: #aeb6c5;
+      font-size: 10px;
+      line-height: 1.55;
+      min-height: 47px;
+    }
+    .reason-box b { color: #e3e7ef; }
+
+    .log-section {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .section-title {
+      height: 34px;
+      flex: 0 0 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 11px;
+      font-size: 11px;
+      font-weight: 700;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .section-title span { color: var(--muted); font-weight: 400; font-size: 9px; }
+    .signal-log { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0 8px; scrollbar-width: thin; scrollbar-color: #303746 transparent; }
+    .log-item {
+      display: grid;
+      grid-template-columns: 48px 8px 1fr;
+      gap: 7px;
+      padding: 7px 10px;
+      border-bottom: 1px solid rgba(255,255,255,.035);
+      font-size: 10px;
+      line-height: 1.4;
+    }
+    .log-time { color: #697185; font-family: "Cascadia Mono", Consolas, monospace; }
+    .log-dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 4px; background: var(--blue); box-shadow: 0 0 7px currentColor; }
+    .log-item.buy .log-dot { color: var(--green); background: var(--green); }
+    .log-item.sell .log-dot, .log-item.exit .log-dot { color: var(--red); background: var(--red); }
+    .log-item.warn .log-dot { color: var(--yellow); background: var(--yellow); }
+    .log-text { color: #aeb5c3; }
+    .log-text b { color: #e3e7ef; font-weight: 600; }
+
+    .panel-foot {
+      flex: 0 0 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 10px;
+      color: #697185;
+      font-size: 9px;
+      border-top: 1px solid var(--line);
+      background: #0c0f14;
+    }
+
+    dialog {
+      width: min(520px, calc(100vw - 24px));
+      max-height: min(720px, calc(100dvh - 24px));
+      color: var(--text);
+      background: #10141b;
+      border: 1px solid #303746;
+      border-radius: 8px;
+      padding: 0;
+      box-shadow: 0 18px 70px rgba(0,0,0,.65);
+    }
+    dialog::backdrop { background: rgba(0,0,0,.72); backdrop-filter: blur(3px); }
+    .dialog-head { display: flex; align-items: center; justify-content: space-between; padding: 13px 15px; border-bottom: 1px solid var(--line); }
+    .dialog-head strong { font-size: 14px; }
+    .icon-btn { width: 29px; height: 29px; border-radius: 4px; background: #1a1f2a; cursor: pointer; }
+    .settings-body { padding: 14px 15px; display: grid; gap: 13px; overflow-y: auto; }
+    .field { display: grid; grid-template-columns: 1fr 160px; gap: 14px; align-items: center; }
+    .field label { font-size: 12px; color: #d5dae4; }
+    .field small { display: block; color: var(--muted); margin-top: 3px; font-size: 9px; }
+    .field input, .field select {
+      width: 100%;
+      height: 34px;
+      border: 1px solid #303746;
+      border-radius: 4px;
+      background: #0b0e13;
+      padding: 0 9px;
+      outline: none;
+    }
+    .field input:focus, .field select:focus { border-color: var(--blue); }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 15px; border-top: 1px solid var(--line); }
+    .dialog-btn { padding: 8px 13px; border-radius: 4px; background: #1a1f2a; border: 1px solid #303746; cursor: pointer; }
+    .dialog-btn.primary { background: #2877d4; border-color: #4c9dff; color: #fff; }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      top: 58px;
+      transform: translateX(-50%) translateY(-8px);
+      z-index: 80;
+      max-width: calc(100vw - 24px);
+      padding: 9px 13px;
+      border-radius: 5px;
+      border: 1px solid #343b4b;
+      background: rgba(18,22,30,.96);
+      color: #dce2ec;
+      font-size: 11px;
+      opacity: 0;
+      pointer-events: none;
+      transition: .2s ease;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .toast.warn { color: #f8d87f; border-color: rgba(245,196,81,.45); }
+    .toast.error { color: #ff91a7; border-color: rgba(255,65,108,.5); }
+
+    @media (max-width: 1050px) {
+      :root { --panel-w: 350px; }
+      .ohlc { display: none; }
+      .top-price { min-width: 130px; }
+    }
+
+    @media (max-width: 820px) {
+      :root { --header-h: 44px; }
+      .topbar { padding: 0 8px; gap: 7px; }
+      .brand-title { max-width: 126px; }
+      .brand-title .desktop-only { display: none; }
+      .top-price { min-width: 0; padding-left: 0; }
+      .top-price strong { font-size: 13px; }
+      .top-price span, .connection span, #settingsBtn span, #alertBtn span { display: none; }
+      .connection { padding: 0 3px; }
+      .top-action { width: 32px; padding: 0; font-size: 14px; }
+
+      .workspace { display: block; position: relative; }
+      .chart-side { width: 100%; height: 100%; padding-bottom: 71px; }
+      .chart-toolbar { padding: 0 7px; gap: 5px; }
+      .toolbar-note { display: none; }
+      .chart-hint { display: none; }
+      .legend { gap: 8px; font-size: 9px; }
+
+      .signal-panel {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        height: 72px;
+        max-height: calc(100dvh - 58px);
+        border-left: 0;
+        border-top: 1px solid #343b4a;
+        border-radius: 12px 12px 0 0;
+        box-shadow: 0 -12px 35px rgba(0,0,0,.48);
+        transition: height .28s ease;
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+      .signal-panel.expanded { height: min(64dvh, 590px); }
+      .mobile-handle {
+        display: flex;
+        height: 25px;
+        flex: 0 0 25px;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        cursor: pointer;
+      }
+      .mobile-handle::after { content: ""; width: 44px; height: 4px; border-radius: 4px; background: #3b4251; }
+      .panel-head {
+        height: 46px;
+        flex: 0 0 46px;
+        cursor: pointer;
+      }
+      .signal-panel:not(.expanded) .panel-head {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 25px;
+        border-bottom: 0;
+      }
+      .signal-panel:not(.expanded) .panel-title { font-size: 13px; }
+      .signal-panel:not(.expanded) .panel-title::after {
+        content: attr(data-mobile-status);
+        margin-left: 8px;
+        color: #dfe4ed;
+        font-family: "Cascadia Mono", Consolas, monospace;
+      }
+      .signal-panel:not(.expanded) .period-tag { color: var(--muted); }
+      .signal-panel:not(.expanded) .signal-main,
+      .signal-panel:not(.expanded) .flow-strip,
+      .signal-panel:not(.expanded) .reason-box,
+      .signal-panel:not(.expanded) .log-section,
+      .signal-panel:not(.expanded) .panel-foot { display: none; }
+      .signal-main { padding-top: 9px; }
+      .signal-state { font-size: 23px; }
+      .levels { grid-template-columns: repeat(3, 1fr); }
+      .level.invalid, .level.runner { display: none; }
+      .log-section { min-height: 130px; }
+    }
+
+    @media (max-width: 500px) {
+      .brand-mark { display: none; }
+      .brand-title { max-width: 92px; font-size: 12px; }
+      .tf-btn { min-width: 34px; padding: 0 5px; }
+      .legend-item:nth-child(3) { display: none; }
+      .levels { grid-template-columns: 1fr 1fr; }
+      .level.invalid { display: block; }
+      .flow-strip { grid-template-columns: 1fr 1fr 1fr; }
+      .field { grid-template-columns: 1fr; gap: 6px; }
+    }
+
+    @media (max-height: 620px) and (min-width: 821px) {
+      .signal-main { padding-top: 8px; padding-bottom: 7px; }
+      .reason-box { display: none; }
+      .flow-cell { padding-top: 5px; padding-bottom: 5px; }
+      .panel-head { height: 42px; flex-basis: 42px; }
+      .level { padding-top: 5px; padding-bottom: 5px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">Ξ</span>
+        <span class="brand-title">ETH/USDT <span class="desktop-only">日内合约分析</span></span>
+      </div>
+      <div class="top-price mono">
+        <strong id="topPrice">--</strong>
+        <span id="topChange">等待行情</span>
+      </div>
+      <div class="top-spacer"></div>
+      <div class="connection">
+        <i id="connectionDot" class="status-dot"></i>
+        <span id="connectionText">正在初始化</span>
+      </div>
+      <button id="alertBtn" class="top-action" type="button" aria-label="启用声音与振动">🔔 <span>启用警报</span></button>
+      <button id="settingsBtn" class="top-action" type="button" aria-label="打开参数设置">⚙ <span>参数</span></button>
+    </header>
+
+    <main class="workspace">
+      <section class="chart-side" aria-label="ETH K线图">
+        <div class="chart-toolbar">
+          <div class="tf-group" aria-label="K线周期">
+            <button class="tf-btn active" data-tf="1" type="button">1m</button>
+            <button class="tf-btn" data-tf="3" type="button">3m</button>
+            <button class="tf-btn" data-tf="5" type="button">5m</button>
+            <button class="tf-btn" data-tf="15" type="button">15m</button>
+          </div>
+          <span class="toolbar-divider"></span>
+          <div class="ohlc mono">
+            <span>开 <b id="ohlcO">--</b></span>
+            <span>高 <b id="ohlcH">--</b></span>
+            <span>低 <b id="ohlcL">--</b></span>
+            <span>收 <b id="ohlcC">--</b></span>
+            <span>量 <b id="ohlcV">--</b></span>
+          </div>
+          <span id="toolbarNote" class="toolbar-note">原始0.01 · 墙分析0.1 USDT分桶</span>
+        </div>
+        <div id="chartWrap" class="chart-wrap">
+          <canvas id="chartCanvas" role="img" aria-label="ETH USDT K线、成交量、CVD、VWAP和盘口墙"></canvas>
+          <div class="legend" aria-hidden="true">
+            <span class="legend-item legend-ema21">EMA21</span>
+            <span class="legend-item legend-ema50">EMA50</span>
+            <span class="legend-item legend-vwap">VWAP</span>
+          </div>
+          <div id="chartLoading" class="chart-loading">正在加载币安历史K线与盘口…</div>
+          <div id="chartWarning" class="chart-warning hidden">实时流不可达，正在使用REST降级模式</div>
+          <div class="chart-hint">滚轮缩放 · 拖动回看 · 双击回到最新</div>
+        </div>
+      </section>
+
+      <aside id="signalPanel" class="signal-panel" aria-label="实时信号引擎">
+        <button id="mobileHandle" class="mobile-handle" type="button" aria-label="展开或收起实时信号面板"></button>
+        <div id="panelHead" class="panel-head">
+          <div id="panelTitle" class="panel-title" data-mobile-status="观望 · --">
+            <span class="bars-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+            实时信号引擎
+          </div>
+          <span id="periodTag" class="period-tag">1分钟</span>
+        </div>
+
+        <div class="signal-main">
+          <div class="score-row">
+            <div class="score-bar"><div id="scoreFill" class="score-fill"></div></div>
+            <span id="scoreValue" class="score-value mono">0</span>
+          </div>
+          <div id="signalState" class="signal-state">观望 (0)</div>
+          <div class="market-line">
+            <span id="regimeChip" class="market-chip">市场状态：初始化</span>
+            <span id="setupChip" class="market-chip">策略：等待数据</span>
+          </div>
+          <div class="confidence-line">
+            信心度：<strong id="confidenceText">低</strong>
+            &nbsp;·&nbsp;
+            实际盈亏比：<strong id="rrText">--</strong>
+          </div>
+
+          <div id="levels" class="levels">
+            <div class="level"><label>入场价</label><strong id="entryPrice">等待信号</strong></div>
+            <div class="level tp"><label>主止盈 TP1</label><strong id="takeProfit">等待信号</strong></div>
+            <div class="level invalid"><label>失效价</label><strong id="invalidPrice">等待信号</strong></div>
+            <div class="level stop"><label>硬止损 SL</label><strong id="stopLoss">等待信号</strong></div>
+            <div class="level runner"><label>延伸目标</label><strong id="runnerPrice">等待信号</strong></div>
+            <div class="level"><label>信号年龄</label><strong id="signalAge">--</strong></div>
+          </div>
+        </div>
+
+        <div class="flow-strip">
+          <div class="flow-cell"><span>10秒主动流</span><b id="flowValue" class="mono neutral">--</b></div>
+          <div class="flow-cell"><span>盘口失衡</span><b id="bookImbalance" class="mono neutral">--</b></div>
+          <div class="flow-cell"><span>资金斜率</span><b id="fundingSlope" class="mono neutral">--</b></div>
+        </div>
+
+        <div id="reasonBox" class="reason-box"><b>判断：</b>正在收集1分钟K线、逐笔成交和本地深度盘口。</div>
+
+        <section class="log-section">
+          <div class="section-title">信号明细 <span>最近10条</span></div>
+          <div id="signalLog" class="signal-log" aria-live="polite"></div>
+        </section>
+
+        <div class="panel-foot">
+          <span id="bookStatus">盘口：初始化</span>
+          <span id="latencyText">延迟：--</span>
+          <span id="clockText" class="mono">--:--:--</span>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <dialog id="settingsDialog">
+    <div class="dialog-head">
+      <strong>策略参数</strong>
+      <button id="closeSettings" class="icon-btn" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="settings-body">
+      <div class="field">
+        <label>风险风格<small>保守提高触发门槛；灵敏会增加信号数量。</small></label>
+        <select id="riskProfile">
+          <option value="conservative">保守</option>
+          <option value="balanced">均衡</option>
+          <option value="sensitive">灵敏</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>盘口价格分桶<small>原始0.01报价保留，墙识别时按此宽度合并。</small></label>
+        <input id="bookBinInput" type="number" min="0.05" max="2" step="0.05">
+      </div>
+      <div class="field">
+        <label>动态墙最低数量（ETH）<small>最终阈值还会结合盘口中位数和异常倍数。</small></label>
+        <input id="wallFloorInput" type="number" min="5" max="5000" step="5">
+      </div>
+      <div class="field">
+        <label>超级墙数量（ETH）<small>达到该数量会无条件标记为超级墙。</small></label>
+        <input id="megaWallInput" type="number" min="100" max="20000" step="100">
+      </div>
+      <div class="field">
+        <label>信号基础门槛<small>市场状态、CVD、主动成交和盘口共同评分。</small></label>
+        <input id="signalThresholdInput" type="number" min="55" max="90" step="1">
+      </div>
+      <div class="field">
+        <label>自动滚动<small>保持K线始终跟随最新行情。</small></label>
+        <select id="autoScrollSelect"><option value="true">开启</option><option value="false">关闭</option></select>
+      </div>
+    </div>
+    <div class="dialog-actions">
+      <button id="resetSettings" class="dialog-btn" type="button">恢复默认</button>
+      <button id="saveSettings" class="dialog-btn primary" type="button">保存并应用</button>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    var API_BASE = "https://fapi.binance.com";
+    var WS_BASE = "wss://fstream.binance.com/stream?streams=";
+    var STREAMS = [
+      "ethusdt@aggTrade",
+      "ethusdt@depth@100ms",
+      "ethusdt@markPrice@1s",
+      "ethusdt@kline_1m",
+      "ethusdt@forceOrder"
+    ];
+
+    var DEFAULT_CONFIG = {
+      bookBin: 0.1,
+      wallFloorEth: 40,
+      megaWallEth: 2000,
+      wallMultiplier: 4.2,
+      signalThreshold: 72,
+      riskProfile: "balanced",
+      autoScroll: true,
+      maxBookDistancePct: 0.45,
+      staleMs: 6500,
+      cooldownMs: 45000
+    };
+
+    function loadConfig() {
+      try {
+        var saved = JSON.parse(localStorage.getItem("ethAnalyzerConfig") || "{}");
+        return Object.assign({}, DEFAULT_CONFIG, saved);
+      } catch (e) {
+        return Object.assign({}, DEFAULT_CONFIG);
+      }
+    }
+
+    var config = loadConfig();
+    var els = {};
+    var state = {
+      candles1m: [],
+      selectedTf: 1,
+      lastPrice: 0,
+      markPrice: 0,
+      indexPrice: 0,
+      priceHistory: [],
+      cvd: 0,
+      tradeSeconds: new Map(),
+      rawTrades: [],
+      lastAggId: -1,
+      markSamples: [],
+      liquidations: [],
+      book: {
+        bids: new Map(),
+        asks: new Map(),
+        lastUpdateId: 0,
+        previousU: 0,
+        buffer: [],
+        syncing: true,
+        synced: false,
+        lastEventAt: 0,
+        resyncing: false
+      },
+      wallHistory: [],
+      currentBookMetrics: null,
+      currentMetrics: null,
+      regime: {
+        confirmed: "TRANSITION",
+        candidate: "TRANSITION",
+        candidateSince: 0,
+        updatedAt: 0,
+        longScore: 0,
+        shortScore: 0
+      },
+      signal: null,
+      displaySignal: null,
+      candidateSignal: null,
+      lastSignalAt: 0,
+      logs: [],
+      ws: null,
+      wsOpen: false,
+      wsAttempts: 0,
+      reconnectTimer: null,
+      lastWsMessageAt: 0,
+      transport: "INIT",
+      restTimers: [],
+      restFallback: false,
+      alertEnabled: false,
+      audioContext: null,
+      lastAnalysisAt: 0,
+      lastWallSnapshotAt: 0,
+      microLogAt: {},
+      lastRegimeLogged: "",
+      chart: {
+        visibleCount: 115,
+        offset: 0,
+        dragStartX: 0,
+        dragOffset: 0,
+        dragging: false,
+        crosshair: null,
+        pinchDistance: 0
+      },
+      errors: []
+    };
+
+    function $(id) { return document.getElementById(id); }
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+    function num(v, fallback) {
+      var n = Number(v);
+      return Number.isFinite(n) ? n : (fallback || 0);
+    }
+    function sum(arr) { return arr.reduce(function (a, b) { return a + b; }, 0); }
+    function mean(arr) { return arr.length ? sum(arr) / arr.length : 0; }
+    function median(arr) {
+      if (!arr.length) return 0;
+      var s = arr.slice().sort(function (a, b) { return a - b; });
+      var m = Math.floor(s.length / 2);
+      return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    }
+    function stddev(arr) {
+      if (arr.length < 2) return 0;
+      var m = mean(arr);
+      return Math.sqrt(mean(arr.map(function (v) { return Math.pow(v - m, 2); })));
+    }
+    function percentile(arr, p) {
+      if (!arr.length) return 0;
+      var s = arr.slice().sort(function (a, b) { return a - b; });
+      var idx = clamp((s.length - 1) * p, 0, s.length - 1);
+      var lo = Math.floor(idx);
+      var hi = Math.ceil(idx);
+      return lo === hi ? s[lo] : s[lo] + (s[hi] - s[lo]) * (idx - lo);
+    }
+    function formatPrice(v) {
+      if (!v || !Number.isFinite(v)) return "--";
+      return v.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function formatQty(v) {
+      if (!Number.isFinite(v)) return "--";
+      var a = Math.abs(v);
+      if (a >= 1000) return (v / 1000).toFixed(2) + "k ETH";
+      if (a >= 100) return v.toFixed(0) + " ETH";
+      return v.toFixed(2) + " ETH";
+    }
+    function formatCompact(v) {
+      if (!Number.isFinite(v)) return "--";
+      var a = Math.abs(v);
+      if (a >= 1000000000) return (v / 1000000000).toFixed(2) + "B";
+      if (a >= 1000000) return (v / 1000000).toFixed(2) + "M";
+      if (a >= 1000) return (v / 1000).toFixed(1) + "K";
+      return v.toFixed(2);
+    }
+    function formatTime(ts) {
+      return new Date(ts).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+    function signClass(v) { return v > 0 ? "positive" : v < 0 ? "negative" : "neutral"; }
+    function profileThresholdOffset() {
+      return config.riskProfile === "conservative" ? 5 : config.riskProfile === "sensitive" ? -4 : 0;
+    }
+
+    function showToast(message, type) {
+      els.toast.textContent = message;
+      els.toast.className = "toast show" + (type ? " " + type : "");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(function () { els.toast.className = "toast"; }, 2800);
+    }
+
+    async function api(path, timeoutMs) {
+      var controller = new AbortController();
+      var timer = setTimeout(function () { controller.abort(); }, timeoutMs || 12000);
+      try {
+        var response = await fetch(API_BASE + path, {
+          cache: "no-store",
+          mode: "cors",
+          signal: controller.signal
+        });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        return await response.json();
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function addLog(type, text) {
+      var entry = { type: type || "info", text: text, time: Date.now() };
+      state.logs.unshift(entry);
+      state.logs = state.logs.slice(0, 10);
+      renderLogs();
+    }
+
+    function addLogOnce(key, type, text, cooldownMs) {
+      var now = Date.now();
+      if (state.microLogAt[key] && now - state.microLogAt[key] < (cooldownMs || 8000)) return;
+      state.microLogAt[key] = now;
+      addLog(type, text);
+    }
+
+    function renderLogs() {
+      if (!state.logs.length) {
+        els.signalLog.innerHTML = '<div class="log-item"><span class="log-time">--:--</span><i class="log-dot"></i><span class="log-text">等待实时量价事件。</span></div>';
+        return;
+      }
+      els.signalLog.innerHTML = state.logs.map(function (item) {
+        return '<div class="log-item ' + item.type + '">' +
+          '<span class="log-time">' + formatTime(item.time).slice(0, 5) + '</span>' +
+          '<i class="log-dot"></i>' +
+          '<span class="log-text">' + item.text + '</span>' +
+          '</div>';
+      }).join("");
+    }
+
+    function updateConnection(mode, text) {
+      state.transport = mode;
+      els.connectionDot.className = "status-dot " + (mode === "WS" ? "live" : mode === "REST" ? "degraded" : "offline");
+      els.connectionText.textContent = text;
+      els.chartWarning.classList.toggle("hidden", mode !== "REST");
+    }
+
+    async function loadInitialKlines() {
+      try {
+        var rows = await api("/fapi/v1/klines?symbol=ETHUSDT&interval=1m&limit=1500", 15000);
+        state.candles1m = rows.map(function (r) {
+          var volume = num(r[5]);
+          var takerBuy = num(r[9]);
+          return {
+            t: num(r[0]), o: num(r[1]), h: num(r[2]), l: num(r[3]), c: num(r[4]),
+            v: volume, d: takerBuy * 2 - volume, closed: num(r[6]) < Date.now()
+          };
+        });
+        state.lastPrice = state.candles1m.length ? state.candles1m[state.candles1m.length - 1].c : 0;
+        state.cvd = sum(state.candles1m.slice(-240).map(function (c) { return c.d; }));
+        els.chartLoading.classList.add("hidden");
+        addLog("info", "<b>历史K线已加载</b>，开始计算5m/15m市场状态。");
+        drawChart();
+      } catch (e) {
+        els.chartLoading.textContent = "历史K线加载失败：" + e.message;
+        addLog("warn", "<b>历史K线加载失败</b>，等待网络恢复。");
+      }
+    }
+
+    async function fetchBookSnapshot(source) {
+      if (state.book.resyncing) return;
+      state.book.resyncing = true;
+      try {
+        var snap = await api("/fapi/v1/depth?symbol=ETHUSDT&limit=1000", 12000);
+        var bids = new Map();
+        var asks = new Map();
+        snap.bids.forEach(function (x) { if (num(x[1]) > 0) bids.set(num(x[0]), num(x[1])); });
+        snap.asks.forEach(function (x) { if (num(x[1]) > 0) asks.set(num(x[0]), num(x[1])); });
+        state.book.bids = bids;
+        state.book.asks = asks;
+        state.book.lastUpdateId = num(snap.lastUpdateId);
+        state.book.previousU = state.book.lastUpdateId;
+        state.book.synced = true;
+        state.book.syncing = false;
+        state.book.lastEventAt = Date.now();
+        if (source === "WS") applyBufferedDepth();
+      } catch (e) {
+        state.book.synced = false;
+        addLog("warn", "<b>盘口快照失败</b>：" + e.message);
+      } finally {
+        state.book.resyncing = false;
+      }
+    }
+
+    function applyDepthLevels(map, levels) {
+      levels.forEach(function (x) {
+        var price = num(x[0]);
+        var qty = num(x[1]);
+        if (!price) return;
+        if (qty === 0) map.delete(price);
+        else map.set(price, qty);
+      });
+    }
+
+    function applyBufferedDepth() {
+      var buffer = state.book.buffer.slice();
+      state.book.buffer.length = 0;
+      var started = false;
+      for (var i = 0; i < buffer.length; i++) {
+        var evt = buffer[i];
+        if (evt.u < state.book.lastUpdateId) continue;
+        if (!started) {
+          if (evt.U > state.book.lastUpdateId + 1 || evt.u < state.book.lastUpdateId) continue;
+          started = true;
+        }
+        if (state.book.previousU && evt.pu && evt.pu !== state.book.previousU) {
+          requestBookResync("盘口序列断裂");
+          return;
+        }
+        applyDepthLevels(state.book.bids, evt.b || []);
+        applyDepthLevels(state.book.asks, evt.a || []);
+        state.book.previousU = evt.u;
+        state.book.lastUpdateId = evt.u;
+      }
+      state.book.synced = true;
+    }
+
+    function handleDepth(evt) {
+      state.book.lastEventAt = Date.now();
+      if (state.book.syncing || !state.book.synced) {
+        state.book.buffer.push(evt);
+        if (state.book.buffer.length > 5000) state.book.buffer.splice(0, 2500);
+        return;
+      }
+      if (state.book.previousU && evt.pu && evt.pu !== state.book.previousU) {
+        requestBookResync("盘口增量丢包");
+        return;
+      }
+      applyDepthLevels(state.book.bids, evt.b || []);
+      applyDepthLevels(state.book.asks, evt.a || []);
+      state.book.previousU = evt.u;
+      state.book.lastUpdateId = evt.u;
+      trimBook();
+    }
+
+    function trimBook() {
+      if (state.book.bids.size > 2600) {
+        var bids = Array.from(state.book.bids.entries()).sort(function (a, b) { return b[0] - a[0]; }).slice(0, 1500);
+        state.book.bids = new Map(bids);
+      }
+      if (state.book.asks.size > 2600) {
+        var asks = Array.from(state.book.asks.entries()).sort(function (a, b) { return a[0] - b[0]; }).slice(0, 1500);
+        state.book.asks = new Map(asks);
+      }
+    }
+
+    function requestBookResync(reason) {
+      if (state.book.resyncing) return;
+      state.book.synced = false;
+      state.book.syncing = true;
+      state.book.buffer.length = 0;
+      addLog("warn", "<b>" + reason + "</b>，正在重建本地订单簿。");
+      fetchBookSnapshot(state.wsOpen ? "WS" : "REST");
+    }
+
+    function processTrade(d) {
+      var id = num(d.a, -1);
+      if (id >= 0 && id <= state.lastAggId) return;
+      if (id >= 0) state.lastAggId = id;
+      var price = num(d.p);
+      var qty = num(d.q);
+      var time = num(d.T || d.E || Date.now());
+      var sellTaker = Boolean(d.m);
+      if (!price || !qty) return;
+      state.lastPrice = price;
+      var delta = sellTaker ? -qty : qty;
+      state.cvd += delta;
+      var sec = Math.floor(time / 1000) * 1000;
+      var row = state.tradeSeconds.get(sec) || { buy: 0, sell: 0, delta: 0, notional: 0, price: price };
+      if (sellTaker) row.sell += qty;
+      else row.buy += qty;
+      row.delta += delta;
+      row.notional += qty * price;
+      row.price = price;
+      state.tradeSeconds.set(sec, row);
+      state.rawTrades.push({ t: time, p: price, q: qty, side: sellTaker ? "SELL" : "BUY" });
+      state.priceHistory.push({ t: time, p: price });
+      pruneRealtimeBuffers(time);
+    }
+
+    function pruneRealtimeBuffers(now) {
+      var tradeCut = now - 120000;
+      while (state.rawTrades.length && state.rawTrades[0].t < tradeCut) state.rawTrades.shift();
+      var priceCut = now - 300000;
+      while (state.priceHistory.length && state.priceHistory[0].t < priceCut) state.priceHistory.shift();
+      Array.from(state.tradeSeconds.keys()).forEach(function (k) {
+        if (k < now - 600000) state.tradeSeconds.delete(k);
+      });
+      state.markSamples = state.markSamples.filter(function (x) { return x.t >= now - 300000; });
+      state.liquidations = state.liquidations.filter(function (x) { return x.t >= now - 300000; });
+    }
+
+    function processMark(d) {
+      var t = num(d.E || Date.now());
+      state.markPrice = num(d.p, state.markPrice);
+      state.indexPrice = num(d.i, state.indexPrice);
+      state.markSamples.push({
+        t: t,
+        rate: num(d.r),
+        mark: state.markPrice,
+        index: state.indexPrice,
+        premium: state.indexPrice ? (state.markPrice - state.indexPrice) / state.indexPrice : 0
+      });
+      pruneRealtimeBuffers(t);
+    }
+
+    function processKline(d) {
+      var k = d.k;
+      if (!k) return;
+      var candle = {
+        t: num(k.t), o: num(k.o), h: num(k.h), l: num(k.l), c: num(k.c),
+        v: num(k.v), d: num(k.V) * 2 - num(k.v), closed: Boolean(k.x)
+      };
+      var list = state.candles1m;
+      var last = list[list.length - 1];
+      if (last && last.t === candle.t) list[list.length - 1] = candle;
+      else {
+        list.push(candle);
+        if (list.length > 1600) list.splice(0, list.length - 1600);
+      }
+      state.lastPrice = candle.c || state.lastPrice;
+    }
+
+    function processLiquidation(d) {
+      var o = d.o || d;
+      var price = num(o.ap || o.p);
+      var qty = num(o.q);
+      if (!price || !qty) return;
+      state.liquidations.push({
+        t: num(o.T || d.E || Date.now()),
+        side: String(o.S || ""),
+        notional: price * qty
+      });
+    }
+
+    function connectWebSocket() {
+      clearTimeout(state.reconnectTimer);
+      if (state.ws) {
+        try { state.ws.close(); } catch (e) {}
+      }
+      state.wsOpen = false;
+      state.book.syncing = true;
+      state.book.synced = false;
+      state.book.buffer.length = 0;
+      updateConnection("OFFLINE", "连接实时流");
+      var url = WS_BASE + STREAMS.join("/");
+      var ws;
+      try {
+        ws = new WebSocket(url);
+      } catch (e) {
+        scheduleReconnect();
+        return;
+      }
+      state.ws = ws;
+      var openTimer = setTimeout(function () {
+        if (!state.wsOpen) {
+          try { ws.close(); } catch (e) {}
+          if (!state.restFallback) startRestFallback();
+        }
+      }, 9000);
+
+      ws.onopen = function () {
+        clearTimeout(openTimer);
+        state.wsOpen = true;
+        state.wsAttempts = 0;
+        state.lastWsMessageAt = Date.now();
+        stopRestFallback();
+        updateConnection("WS", "实时流已连接");
+        addLog("info", "<b>币安实时流已连接</b>，100ms盘口模式启用。");
+        fetchBookSnapshot("WS");
+      };
+
+      ws.onmessage = function (event) {
+        state.lastWsMessageAt = Date.now();
+        var packet;
+        try { packet = JSON.parse(event.data); } catch (e) { return; }
+        var stream = packet.stream || "";
+        var d = packet.data || packet;
+        if (stream.indexOf("@aggTrade") >= 0 || d.e === "aggTrade") processTrade(d);
+        else if (stream.indexOf("@depth") >= 0 || d.e === "depthUpdate") handleDepth(d);
+        else if (stream.indexOf("@markPrice") >= 0 || d.e === "markPriceUpdate") processMark(d);
+        else if (stream.indexOf("@kline") >= 0 || d.e === "kline") processKline(d);
+        else if (stream.indexOf("@forceOrder") >= 0 || d.e === "forceOrder") processLiquidation(d);
+      };
+
+      ws.onerror = function () {
+        clearTimeout(openTimer);
+      };
+
+      ws.onclose = function () {
+        clearTimeout(openTimer);
+        if (state.ws !== ws) return;
+        state.wsOpen = false;
+        if (!state.restFallback) startRestFallback();
+        scheduleReconnect();
+      };
+    }
+
+    function scheduleReconnect() {
+      clearTimeout(state.reconnectTimer);
+      state.wsAttempts += 1;
+      var delay = Math.min(30000, 1500 * Math.pow(1.65, Math.min(state.wsAttempts, 8))) + Math.random() * 800;
+      state.reconnectTimer = setTimeout(connectWebSocket, delay);
+    }
+
+    function stopRestFallback() {
+      state.restTimers.forEach(clearInterval);
+      state.restTimers.length = 0;
+      state.restFallback = false;
+    }
+
+    function startRestFallback() {
+      if (state.restFallback) return;
+      state.restFallback = true;
+      updateConnection("REST", "REST降级模式");
+      addLog("warn", "<b>WebSocket不可达</b>，已切换REST降级模式；盘口与CVD精度降低。");
+      pollRestTrades();
+      pollRestBook();
+      pollRestMark();
+      pollRestKline();
+      state.restTimers.push(setInterval(pollRestTrades, 2200));
+      state.restTimers.push(setInterval(pollRestBook, 2800));
+      state.restTimers.push(setInterval(pollRestMark, 5000));
+      state.restTimers.push(setInterval(pollRestKline, 8000));
+    }
+
+    async function pollRestTrades() {
+      try {
+        var rows = await api("/fapi/v1/aggTrades?symbol=ETHUSDT&limit=500", 9000);
+        rows.forEach(processTrade);
+      } catch (e) {}
+    }
+    async function pollRestBook() {
+      if (state.wsOpen) return;
+      await fetchBookSnapshot("REST");
+    }
+    async function pollRestMark() {
+      try {
+        var d = await api("/fapi/v1/premiumIndex?symbol=ETHUSDT", 9000);
+        processMark({ E: Date.now(), p: d.markPrice, i: d.indexPrice, r: d.lastFundingRate });
+      } catch (e) {}
+    }
+    async function pollRestKline() {
+      try {
+        var rows = await api("/fapi/v1/klines?symbol=ETHUSDT&interval=1m&limit=3", 9000);
+        rows.forEach(function (r) {
+          processKline({ k: { t: r[0], o: r[1], h: r[2], l: r[3], c: r[4], v: r[5], V: r[9], x: num(r[6]) < Date.now() } });
+        });
+      } catch (e) {}
+    }
+
+    function aggregateCandles(minutes) {
+      if (minutes === 1) return state.candles1m.slice();
+      var size = minutes * 60000;
+      var out = [];
+      var current = null;
+      state.candles1m.forEach(function (c) {
+        var t = Math.floor(c.t / size) * size;
+        if (!current || current.t !== t) {
+          current = { t: t, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v, d: c.d, closed: c.closed };
+          out.push(current);
+        } else {
+          current.h = Math.max(current.h, c.h);
+          current.l = Math.min(current.l, c.l);
+          current.c = c.c;
+          current.v += c.v;
+          current.d += c.d;
+          current.closed = c.closed;
+        }
+      });
+      return out;
+    }
+
+    function ema(values, period) {
+      var out = new Array(values.length).fill(null);
+      if (!values.length) return out;
+      var alpha = 2 / (period + 1);
+      var prev = values[0];
+      out[0] = prev;
+      for (var i = 1; i < values.length; i++) {
+        prev = values[i] * alpha + prev * (1 - alpha);
+        out[i] = prev;
+      }
+      return out;
+    }
+
+    function atrSeries(candles, period) {
+      var out = new Array(candles.length).fill(null);
+      if (candles.length < 2) return out;
+      var prev = candles[0].h - candles[0].l;
+      out[0] = prev;
+      for (var i = 1; i < candles.length; i++) {
+        var tr = Math.max(
+          candles[i].h - candles[i].l,
+          Math.abs(candles[i].h - candles[i - 1].c),
+          Math.abs(candles[i].l - candles[i - 1].c)
+        );
+        prev = i < period ? ((prev * i) + tr) / (i + 1) : (prev * (period - 1) + tr) / period;
+        out[i] = prev;
+      }
+      return out;
+    }
+
+    function adxValue(candles, period) {
+      if (candles.length < period * 2 + 2) return 0;
+      var trs = [], plus = [], minus = [];
+      for (var i = 1; i < candles.length; i++) {
+        var up = candles[i].h - candles[i - 1].h;
+        var down = candles[i - 1].l - candles[i].l;
+        trs.push(Math.max(candles[i].h - candles[i].l, Math.abs(candles[i].h - candles[i - 1].c), Math.abs(candles[i].l - candles[i - 1].c)));
+        plus.push(up > down && up > 0 ? up : 0);
+        minus.push(down > up && down > 0 ? down : 0);
+      }
+      var trN = sum(trs.slice(0, period));
+      var plusN = sum(plus.slice(0, period));
+      var minusN = sum(minus.slice(0, period));
+      var dxs = [];
+      for (var j = period; j < trs.length; j++) {
+        trN = trN - trN / period + trs[j];
+        plusN = plusN - plusN / period + plus[j];
+        minusN = minusN - minusN / period + minus[j];
+        var pdi = trN ? 100 * plusN / trN : 0;
+        var mdi = trN ? 100 * minusN / trN : 0;
+        dxs.push((pdi + mdi) ? 100 * Math.abs(pdi - mdi) / (pdi + mdi) : 0);
+      }
+      if (!dxs.length) return 0;
+      var adx = mean(dxs.slice(0, period));
+      for (var k = period; k < dxs.length; k++) adx = (adx * (period - 1) + dxs[k]) / period;
+      return adx;
+    }
+
+    function sessionVwap(candles) {
+      var today = new Date();
+      var utcStart = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+      var rows = candles.filter(function (c) { return c.t >= utcStart; });
+      if (!rows.length) rows = candles.slice(-480);
+      var volume = sum(rows.map(function (c) { return c.v; }));
+      if (!volume) return rows.length ? rows[rows.length - 1].c : 0;
+      return sum(rows.map(function (c) { return ((c.h + c.l + c.c) / 3) * c.v; })) / volume;
+    }
+
+    function volumeProfile(candles, atr) {
+      var rows = candles.slice(-240);
+      if (!rows.length) return { poc: 0, low: 0, high: 0 };
+      var bin = Math.max(0.5, Math.round(Math.max(atr / 6, 0.5) * 2) / 2);
+      var map = new Map();
+      rows.forEach(function (c) {
+        var p = Math.round(((c.h + c.l + c.c) / 3) / bin) * bin;
+        map.set(p, (map.get(p) || 0) + c.v);
+      });
+      var entries = Array.from(map.entries());
+      if (!entries.length) return { poc: 0, low: 0, high: 0 };
+      var pocRow = entries.slice().sort(function (a, b) { return b[1] - a[1]; })[0];
+      var total = sum(entries.map(function (x) { return x[1]; }));
+      var selected = [];
+      var acc = 0;
+      entries.slice().sort(function (a, b) { return b[1] - a[1]; }).some(function (x) {
+        selected.push(x[0]);
+        acc += x[1];
+        return acc >= total * 0.7;
+      });
+      return { poc: pocRow[0], low: Math.min.apply(null, selected), high: Math.max.apply(null, selected) };
+    }
+
+    function regressionSlope(samples, key) {
+      if (samples.length < 3) return 0;
+      var t0 = samples[0].t;
+      var xs = samples.map(function (x) { return (x.t - t0) / 60000; });
+      var ys = samples.map(function (x) { return num(x[key]); });
+      var mx = mean(xs), my = mean(ys);
+      var den = sum(xs.map(function (x) { return Math.pow(x - mx, 2); }));
+      if (!den) return 0;
+      return sum(xs.map(function (x, i) { return (x - mx) * (ys[i] - my); })) / den;
+    }
+
+    function latestFlowWindow(seconds, now) {
+      var cutoff = now - seconds * 1000;
+      var rows = Array.from(state.tradeSeconds.entries()).filter(function (x) { return x[0] >= cutoff; }).map(function (x) { return x[1]; });
+      var buy = sum(rows.map(function (x) { return x.buy; }));
+      var sell = sum(rows.map(function (x) { return x.sell; }));
+      return { buy: buy, sell: sell, delta: buy - sell, total: buy + sell };
+    }
+
+    function priceAgo(ms, now) {
+      var cutoff = now - ms;
+      for (var i = state.priceHistory.length - 1; i >= 0; i--) {
+        if (state.priceHistory[i].t <= cutoff) return state.priceHistory[i].p;
+      }
+      return state.priceHistory.length ? state.priceHistory[0].p : state.lastPrice;
+    }
+
+    function computeFlowMetrics(now, atr1) {
+      var f1 = latestFlowWindow(1, now);
+      var f3 = latestFlowWindow(3, now);
+      var f10 = latestFlowWindow(10, now);
+      var previous = [];
+      for (var i = 5; i <= 90; i++) {
+        var sec = Math.floor((now - i * 1000) / 1000) * 1000;
+        var r = state.tradeSeconds.get(sec);
+        if (r) previous.push(r.delta);
+      }
+      var sd = stddev(previous);
+      var z = sd ? (f1.delta - mean(previous)) / sd : 0;
+      var ratio10 = f10.total ? f10.delta / f10.total : 0;
+      var p3 = priceAgo(3000, now);
+      var p10 = priceAgo(10000, now);
+      var change3 = p3 ? state.lastPrice - p3 : 0;
+      var change10 = p10 ? state.lastPrice - p10 : 0;
+      var cvdSlope = f3.total ? f3.delta / f3.total : 0;
+      var lowProgress = atr1 > 0 && Math.abs(change3) < atr1 * 0.12;
+      var sellAbsorption = z < -1.8 && lowProgress;
+      var buyAbsorption = z > 1.8 && lowProgress;
+      return {
+        f1: f1, f3: f3, f10: f10, z: z, ratio10: ratio10,
+        cvdSlope: cvdSlope, change3: change3, change10: change10,
+        sellAbsorption: sellAbsorption, buyAbsorption: buyAbsorption
+      };
+    }
+
+    function bucketPrice(price) {
+      return Math.round(price / config.bookBin) * config.bookBin;
+    }
+
+    function aggregateBook() {
+      var price = state.lastPrice || state.markPrice;
+      if (!price || !state.book.synced) return null;
+      var maxDist = price * config.maxBookDistancePct / 100;
+      var bids = new Map(), asks = new Map();
+      state.book.bids.forEach(function (qty, p) {
+        if (p <= price && price - p <= maxDist) {
+          var key = bucketPrice(p);
+          bids.set(key, (bids.get(key) || 0) + qty);
+        }
+      });
+      state.book.asks.forEach(function (qty, p) {
+        if (p >= price && p - price <= maxDist) {
+          var key = bucketPrice(p);
+          asks.set(key, (asks.get(key) || 0) + qty);
+        }
+      });
+      var allQty = Array.from(bids.values()).concat(Array.from(asks.values())).filter(function (v) { return v > 0; });
+      var med = median(allQty);
+      var p90 = percentile(allQty, 0.90);
+      var threshold = Math.max(config.wallFloorEth, med * config.wallMultiplier, p90 * 1.08);
+      var bidRows = Array.from(bids.entries()).map(function (x) {
+        return { side: "BID", price: x[0], qty: x[1], distancePct: (price - x[0]) / price * 100 };
+      }).sort(function (a, b) { return a.distancePct - b.distancePct; });
+      var askRows = Array.from(asks.entries()).map(function (x) {
+        return { side: "ASK", price: x[0], qty: x[1], distancePct: (x[0] - price) / price * 100 };
+      }).sort(function (a, b) { return a.distancePct - b.distancePct; });
+      var bidWalls = bidRows.filter(function (x) { return x.qty >= threshold || x.qty >= config.megaWallEth; });
+      var askWalls = askRows.filter(function (x) { return x.qty >= threshold || x.qty >= config.megaWallEth; });
+      var band = Math.max(price * 0.0015, (state.currentMetrics ? state.currentMetrics.atr1 : 0) * 0.5, 2);
+      var bidSum = sum(bidRows.filter(function (x) { return price - x.price <= band; }).map(function (x) { return x.qty; }));
+      var askSum = sum(askRows.filter(function (x) { return x.price - price <= band; }).map(function (x) { return x.qty; }));
+      var imbalance = bidSum + askSum ? (bidSum - askSum) / (bidSum + askSum) : 0;
+      return {
+        t: Date.now(), price: price, bids: bids, asks: asks, bidRows: bidRows, askRows: askRows,
+        bidWalls: bidWalls, askWalls: askWalls, threshold: threshold, medianQty: med,
+        imbalance: imbalance, bestBid: bidRows.length ? bidRows[0].price : 0,
+        bestAsk: askRows.length ? askRows[0].price : 0
+      };
+    }
+
+    function tradedAtBucket(side, price, since) {
+      return sum(state.rawTrades.filter(function (t) {
+        return t.t >= since && t.side === side && Math.abs(bucketPrice(t.p) - price) < config.bookBin * 0.1;
+      }).map(function (t) { return t.q; }));
+    }
+
+    function compareWalls(current, old) {
+      var result = {
+        bidCancelMax: 0, askCancelMax: 0, bidCancelPrice: 0, askCancelPrice: 0,
+        bidGrowthMax: 0, askGrowthMax: 0
+      };
+      if (!current || !old) return result;
+      [["BID", old.bids, current.bids], ["ASK", old.asks, current.asks]].forEach(function (group) {
+        var side = group[0], oldMap = group[1], curMap = group[2];
+        oldMap.forEach(function (oldQty, price) {
+          if (oldQty < Math.max(config.wallFloorEth, old.threshold || 0)) return;
+          var curQty = curMap.get(price) || 0;
+          var decrease = Math.max(0, oldQty - curQty);
+          var tradeSide = side === "ASK" ? "BUY" : "SELL";
+          var executed = tradedAtBucket(tradeSide, price, old.t);
+          var cancel = Math.max(0, decrease - executed);
+          var cancelRate = oldQty ? cancel / oldQty : 0;
+          var growth = oldQty ? Math.max(0, curQty - oldQty) / oldQty : 0;
+          if (side === "BID") {
+            if (cancelRate > result.bidCancelMax) { result.bidCancelMax = cancelRate; result.bidCancelPrice = price; }
+            result.bidGrowthMax = Math.max(result.bidGrowthMax, growth);
+          } else {
+            if (cancelRate > result.askCancelMax) { result.askCancelMax = cancelRate; result.askCancelPrice = price; }
+            result.askGrowthMax = Math.max(result.askGrowthMax, growth);
+          }
+        });
+      });
+      return result;
+    }
+
+    function captureWallSnapshot(now) {
+      if (now - state.lastWallSnapshotAt < 950) return;
+      state.lastWallSnapshotAt = now;
+      var book = aggregateBook();
+      if (!book) return;
+      state.currentBookMetrics = book;
+      state.wallHistory.push(book);
+      state.wallHistory = state.wallHistory.filter(function (x) { return x.t >= now - 13000; });
+      var old = state.wallHistory.find(function (x) { return x.t <= now - 9000; }) || state.wallHistory[0];
+      book.changes = compareWalls(book, old);
+    }
+
+    function computeMarketMetrics(now) {
+      var c1 = aggregateCandles(1);
+      var c5 = aggregateCandles(5);
+      var c15 = aggregateCandles(15);
+      if (c1.length < 60 || c5.length < 55 || c15.length < 55) return null;
+      var closes1 = c1.map(function (c) { return c.c; });
+      var closes5 = c5.map(function (c) { return c.c; });
+      var closes15 = c15.map(function (c) { return c.c; });
+      var atr1s = atrSeries(c1, 14);
+      var atr5s = atrSeries(c5, 14);
+      var ema21_5 = ema(closes5, 21);
+      var ema50_5 = ema(closes5, 50);
+      var ema21_15 = ema(closes15, 21);
+      var ema50_15 = ema(closes15, 50);
+      var atr1 = atr1s[atr1s.length - 1] || 0;
+      var atr5 = atr5s[atr5s.length - 1] || 0;
+      var profile = volumeProfile(c1, atr1);
+      var vwap = sessionVwap(c1);
+      var last5 = c5[c5.length - 1];
+      var last15 = c15[c15.length - 1];
+      var adx5 = adxValue(c5, 14);
+      var adx15 = adxValue(c15, 14);
+      var move15 = c1.length > 16 ? (state.lastPrice - c1[c1.length - 16].c) / c1[c1.length - 16].c * 100 : 0;
+      var recentRows = c1.slice(-21, -1);
+      var recentHigh = Math.max.apply(null, recentRows.map(function (c) { return c.h; }));
+      var recentLow = Math.min.apply(null, recentRows.map(function (c) { return c.l; }));
+      var flow = computeFlowMetrics(now, atr1);
+      var fundingRows = state.markSamples.filter(function (x) { return x.t >= now - 60000; });
+      var fundingSlope = regressionSlope(fundingRows, "rate") * 10000;
+      var premiumSlope = regressionSlope(fundingRows, "premium") * 10000;
+      return {
+        c1: c1, c5: c5, c15: c15, atr1: atr1, atr5: atr5,
+        ema21_5: ema21_5[ema21_5.length - 1], ema50_5: ema50_5[ema50_5.length - 1],
+        ema21_15: ema21_15[ema21_15.length - 1], ema50_15: ema50_15[ema50_15.length - 1],
+        adx5: adx5, adx15: adx15, move15: move15, vwap: vwap,
+        vaLow: profile.low, vaHigh: profile.high, poc: profile.poc,
+        recentHigh: recentHigh, recentLow: recentLow, flow: flow,
+        fundingSlope: fundingSlope, premiumSlope: premiumSlope,
+        last5: last5, last15: last15
+      };
+    }
+
+    function updateRegime(metrics, now) {
+      if (!metrics) return;
+      var price = state.lastPrice;
+      var longScore = 0, shortScore = 0;
+      if (metrics.last15.c > metrics.ema21_15 && metrics.ema21_15 > metrics.ema50_15) longScore += 2;
+      else if (metrics.last15.c < metrics.ema21_15 && metrics.ema21_15 < metrics.ema50_15) shortScore += 2;
+      if (metrics.last5.c > metrics.ema21_5 && metrics.ema21_5 > metrics.ema50_5) longScore += 1.5;
+      else if (metrics.last5.c < metrics.ema21_5 && metrics.ema21_5 < metrics.ema50_5) shortScore += 1.5;
+      if (metrics.adx15 >= 18) {
+        if (metrics.last15.c >= metrics.ema21_15) longScore += .8;
+        if (metrics.last15.c <= metrics.ema21_15) shortScore += .8;
+      }
+      if (metrics.adx5 >= 18) {
+        if (metrics.last5.c >= metrics.ema21_5) longScore += .7;
+        if (metrics.last5.c <= metrics.ema21_5) shortScore += .7;
+      }
+      if (metrics.move15 >= .12) longScore += 1;
+      else if (metrics.move15 <= -.12) shortScore += 1;
+      if (price > metrics.vaHigh && metrics.vaHigh > 0) longScore += .8;
+      else if (price < metrics.vaLow && metrics.vaLow > 0) shortScore += .8;
+      if (price > metrics.vwap) longScore += .4;
+      else if (price < metrics.vwap) shortScore += .4;
+
+      var insideValue = metrics.vaLow > 0 && price >= metrics.vaLow && price <= metrics.vaHigh;
+      var candidate = "TRANSITION";
+      if (metrics.adx5 < 20 && metrics.adx15 < 20 && insideValue) candidate = "RANGE";
+      else if (longScore >= 4 && longScore - shortScore >= 1.5) candidate = "TREND_LONG";
+      else if (shortScore >= 4 && shortScore - longScore >= 1.5) candidate = "TREND_SHORT";
+
+      var r = state.regime;
+      if (candidate !== r.candidate) {
+        r.candidate = candidate;
+        r.candidateSince = now;
+      }
+      var required = 12000;
+      if ((r.confirmed === "TREND_LONG" || r.confirmed === "TREND_SHORT") && candidate !== r.confirmed) {
+        required = candidate === "TREND_LONG" || candidate === "TREND_SHORT" ? 20000 : 30000;
+      } else if (r.confirmed === "RANGE" && candidate === "TRANSITION") required = 30000;
+      if (candidate === r.confirmed || now - r.candidateSince >= required) r.confirmed = candidate;
+      r.longScore = longScore;
+      r.shortScore = shortScore;
+      r.updatedAt = now;
+    }
+
+    function regimeLabel(regime) {
+      if (regime === "TREND_LONG") return "趋势上涨";
+      if (regime === "TREND_SHORT") return "趋势下跌";
+      if (regime === "RANGE") return "震荡区间";
+      return "过渡混沌";
+    }
+
+    function setupLabel(tag) {
+      var map = {
+        range_reversal: "区间边缘反转",
+        trend_pullback: "趋势回踩",
+        accepted_breakout: "突破回踩",
+        fake_breakout: "假突破反转",
+        orderflow: "量价共振",
+        wait: "等待确认"
+      };
+      return map[tag] || "等待确认";
+    }
+
+    function evaluateScores(metrics, book) {
+      var price = state.lastPrice;
+      var flow = metrics.flow;
+      var changes = book && book.changes ? book.changes : {};
+      var longScore = 18, shortScore = 18;
+      var longReasons = [], shortReasons = [];
+      var longSetup = "orderflow", shortSetup = "orderflow";
+      var regime = state.regime.confirmed;
+      if (regime === "TREND_LONG") {
+        longScore += 22; shortScore -= 16; longSetup = "trend_pullback";
+        longReasons.push("15m/5m趋势向上");
+      } else if (regime === "TREND_SHORT") {
+        shortScore += 22; longScore -= 16; shortSetup = "trend_pullback";
+        shortReasons.push("15m/5m趋势向下");
+      } else if (regime === "RANGE" && metrics.vaHigh > metrics.vaLow) {
+        var pos = (price - metrics.vaLow) / (metrics.vaHigh - metrics.vaLow);
+        if (pos <= .28) {
+          longScore += 18; longSetup = "range_reversal"; longReasons.push("价格位于区间下沿");
+          shortScore -= 8;
+        } else if (pos >= .72) {
+          shortScore += 18; shortSetup = "range_reversal"; shortReasons.push("价格位于区间上沿");
+          longScore -= 8;
+        } else {
+          longScore -= 12; shortScore -= 12;
+          longReasons.push("震荡中部不追单"); shortReasons.push("震荡中部不追单");
+        }
+      }
+
+      if (flow.z >= 1.2) { longScore += 12; longReasons.push("主动买流异常"); }
+      if (flow.z >= 2.5) longScore += 7;
+      if (flow.z <= -1.2) { shortScore += 12; shortReasons.push("主动卖流异常"); }
+      if (flow.z <= -2.5) shortScore += 7;
+      if (flow.ratio10 >= .15) { longScore += 10; longReasons.push("10秒CVD向上"); }
+      if (flow.ratio10 <= -.15) { shortScore += 10; shortReasons.push("10秒CVD向下"); }
+      if (flow.cvdSlope >= .12) longScore += 7;
+      if (flow.cvdSlope <= -.12) shortScore += 7;
+
+      if (book) {
+        if (book.imbalance >= .08) { longScore += 8; longReasons.push("近端买盘占优"); }
+        if (book.imbalance <= -.08) { shortScore += 8; shortReasons.push("近端卖盘占优"); }
+        var bidWall = book.bidWalls[0];
+        var askWall = book.askWalls[0];
+        if (bidWall && bidWall.distancePct <= .14) { longScore += 10; longReasons.push("下方买墙承接"); }
+        if (askWall && askWall.distancePct <= .14) { shortScore += 10; shortReasons.push("上方卖墙压制"); }
+        if (changes.askCancelMax >= .45) { longScore += 13; longReasons.push("卖墙快速撤单"); }
+        if (changes.bidCancelMax >= .45) { shortScore += 13; shortReasons.push("买墙快速撤单"); }
+        if (changes.bidGrowthMax >= .45) longScore += 5;
+        if (changes.askGrowthMax >= .45) shortScore += 5;
+      }
+
+      if (flow.sellAbsorption) {
+        longScore += 13; longReasons.push("主动砸盘被吸收");
+        if (regime !== "TREND_SHORT") longSetup = regime === "RANGE" ? "range_reversal" : "fake_breakout";
+      }
+      if (flow.buyAbsorption) {
+        shortScore += 13; shortReasons.push("主动买盘被吸收");
+        if (regime !== "TREND_LONG") shortSetup = regime === "RANGE" ? "range_reversal" : "fake_breakout";
+      }
+
+      var brokeHigh = price > metrics.recentHigh + Math.max(metrics.atr1 * .05, price * .00003);
+      var brokeLow = price < metrics.recentLow - Math.max(metrics.atr1 * .05, price * .00003);
+      if (brokeHigh) {
+        if (flow.ratio10 < -.08 || flow.buyAbsorption) {
+          shortScore += 19; shortSetup = "fake_breakout"; shortReasons.push("创新高但CVD转弱");
+          if (metrics.fundingSlope > 0) shortScore += 3;
+        } else if (flow.ratio10 > .12) {
+          longScore += 12; longSetup = "accepted_breakout"; longReasons.push("突破获得主动买盘确认");
+        }
+      }
+      if (brokeLow) {
+        if (flow.ratio10 > .08 || flow.sellAbsorption) {
+          longScore += 19; longSetup = "fake_breakout"; longReasons.push("创新低但CVD转强");
+          if (metrics.fundingSlope < 0) longScore += 3;
+        } else if (flow.ratio10 < -.12) {
+          shortScore += 12; shortSetup = "accepted_breakout"; shortReasons.push("跌破获得主动卖盘确认");
+        }
+      }
+
+      if (state.transport !== "WS") {
+        longScore = Math.min(longScore, 76);
+        shortScore = Math.min(shortScore, 76);
+        longReasons.push("REST降级，信心受限");
+        shortReasons.push("REST降级，信心受限");
+      }
+
+      return {
+        longScore: clamp(Math.round(longScore), 0, 94),
+        shortScore: clamp(Math.round(shortScore), 0, 94),
+        longReasons: longReasons.slice(0, 4),
+        shortReasons: shortReasons.slice(0, 4),
+        longSetup: longSetup,
+        shortSetup: shortSetup
+      };
+    }
+
+    function riskMinimum(setup, regime, confidence) {
+      var minRR = 1.1;
+      if (setup === "range_reversal") minRR = .9;
+      else if (setup === "fake_breakout") minRR = 1.0;
+      else if (setup === "trend_pullback") minRR = 1.35;
+      else if (setup === "accepted_breakout") minRR = 1.45;
+      if (regime === "TRANSITION") minRR += .15;
+      if (confidence >= 86 && setup === "range_reversal") minRR -= .05;
+      return minRR;
+    }
+
+    function buildTradePlan(side, setup, confidence, metrics, book, reasons) {
+      var entry = state.lastPrice;
+      var isLong = side === "BUY";
+      var spread = book && book.bestAsk && book.bestBid ? Math.max(.01, book.bestAsk - book.bestBid) : .02;
+      var buffer = Math.max(metrics.atr1 * .14, spread * 3, entry * .00015);
+      var anchors = [];
+      if (book) {
+        var wall = isLong ? book.bidWalls[0] : book.askWalls[0];
+        if (wall && wall.distancePct <= .45) anchors.push(wall.price);
+      }
+      if (isLong) {
+        [metrics.recentLow, metrics.vaLow, metrics.vwap].forEach(function (v) { if (v > 0 && v < entry) anchors.push(v); });
+      } else {
+        [metrics.recentHigh, metrics.vaHigh, metrics.vwap].forEach(function (v) { if (v > entry) anchors.push(v); });
+      }
+      var anchor;
+      if (anchors.length) anchor = isLong ? Math.max.apply(null, anchors) : Math.min.apply(null, anchors);
+      else anchor = isLong ? entry - metrics.atr1 * .6 : entry + metrics.atr1 * .6;
+      var stop = isLong ? anchor - buffer : anchor + buffer;
+      var risk = Math.abs(entry - stop);
+      var regime = state.regime.confirmed;
+      var minRiskPct = regime === "RANGE" ? .08 : regime.indexOf("TREND") === 0 ? .14 : .11;
+      var maxRiskPct = regime.indexOf("TREND") === 0 ? .80 : .55;
+      var riskPct = risk / entry * 100;
+      if (riskPct < minRiskPct) {
+        risk = entry * minRiskPct / 100;
+        stop = isLong ? entry - risk : entry + risk;
+      }
+      riskPct = risk / entry * 100;
+      if (riskPct > maxRiskPct || risk <= 0) return null;
+      var invalid = isLong ? entry - risk * .68 : entry + risk * .68;
+      var minRR = riskMinimum(setup, regime, confidence);
+      var candidates = [];
+      if (book) {
+        var walls = isLong ? book.askWalls : book.bidWalls;
+        walls.slice(0, 5).forEach(function (w) {
+          var target = isLong ? w.price - buffer * .2 : w.price + buffer * .2;
+          candidates.push(target);
+        });
+      }
+      var structural = isLong ?
+        [metrics.poc, metrics.vaHigh, metrics.recentHigh, metrics.vwap] :
+        [metrics.poc, metrics.vaLow, metrics.recentLow, metrics.vwap];
+      structural.forEach(function (x) { candidates.push(x); });
+      var preferredRR;
+      if (setup === "range_reversal") preferredRR = 1.0 + clamp((confidence - 72) / 45, 0, .35);
+      else if (setup === "fake_breakout") preferredRR = 1.15 + clamp((confidence - 72) / 28, 0, .55);
+      else if (setup === "trend_pullback") preferredRR = 1.65 + clamp((metrics.adx15 - 18) / 18, 0, .75);
+      else if (setup === "accepted_breakout") preferredRR = 1.75 + clamp((confidence - 75) / 18, 0, .85);
+      else preferredRR = 1.25 + clamp((confidence - 72) / 30, 0, .5);
+      candidates.push(isLong ? entry + risk * preferredRR : entry - risk * preferredRR);
+
+      var minTarget = isLong ? entry + risk * minRR : entry - risk * minRR;
+      var valid = candidates.filter(function (x) {
+        return x > 0 && (isLong ? x >= minTarget : x <= minTarget);
+      }).sort(function (a, b) { return isLong ? a - b : b - a; });
+      if (!valid.length) return null;
+      var target = valid[0];
+      var rr = Math.abs(target - entry) / risk;
+      if (rr < minRR) return null;
+      var farther = valid.filter(function (x) { return isLong ? x > target : x < target; });
+      var runner = farther.length ? farther[farther.length - 1] : (isLong ? target + Math.max(metrics.atr1, risk * .85) : target - Math.max(metrics.atr1, risk * .85));
+      if (runner <= 0) runner = 0;
+      var supportWall = null;
+      if (book) supportWall = isLong ? book.bidWalls[0] : book.askWalls[0];
+      return {
+        side: side,
+        setup: setup,
+        confidence: confidence,
+        entry: entry,
+        stop: stop,
+        invalid: invalid,
+        target: target,
+        runner: runner,
+        rr: rr,
+        createdAt: Date.now(),
+        reasons: reasons,
+        regime: regime,
+        supportWallPrice: supportWall ? supportWall.price : 0,
+        supportWallQty: supportWall ? supportWall.qty : 0,
+        crisis: false
+      };
+    }
+
+    function signalThreshold() {
+      return clamp(config.signalThreshold + profileThresholdOffset(), 55, 92);
+    }
+
+    function maybeTriggerSignal(scores, metrics, book, now) {
+      if (state.signal) return;
+      var side = scores.longScore >= scores.shortScore ? "BUY" : "SELL";
+      var score = side === "BUY" ? scores.longScore : scores.shortScore;
+      var reasons = side === "BUY" ? scores.longReasons : scores.shortReasons;
+      var setup = side === "BUY" ? scores.longSetup : scores.shortSetup;
+      var threshold = signalThreshold();
+      if (score < threshold || score - Math.min(scores.longScore, scores.shortScore) < 8 || now - state.lastSignalAt < config.cooldownMs) {
+        state.candidateSignal = null;
+        return;
+      }
+      if (!state.candidateSignal || state.candidateSignal.side !== side || state.candidateSignal.setup !== setup) {
+        state.candidateSignal = { side: side, setup: setup, count: 1, since: now };
+        return;
+      }
+      state.candidateSignal.count += 1;
+      var required = config.riskProfile === "sensitive" ? 2 : config.riskProfile === "conservative" ? 4 : 3;
+      if (state.candidateSignal.count < required) return;
+      var plan = buildTradePlan(side, setup, score, metrics, book, reasons);
+      state.candidateSignal = null;
+      if (!plan) {
+        addLog("warn", "<b>信号被过滤</b>：结构止损或目标空间不合格。");
+        state.lastSignalAt = now - config.cooldownMs + 12000;
+        return;
+      }
+      state.signal = plan;
+      state.displaySignal = plan;
+      state.lastSignalAt = now;
+      addLog(side === "BUY" ? "buy" : "sell",
+        "<b>" + (side === "BUY" ? "做多 BUY" : "做空 SELL") + "</b> · " +
+        setupLabel(setup) + " · 入场 " + formatPrice(plan.entry) + " · TP " + formatPrice(plan.target) + " · SL " + formatPrice(plan.stop));
+      playSignalTone(side);
+    }
+
+    function emitMicroAlerts(metrics, book, now) {
+      var flow = metrics.flow;
+      if (flow.z >= 2.5) {
+        addLogOnce("flow-buy", "buy", "<b>主动买盘脉冲</b> · Z=" + flow.z.toFixed(2) + " · 10秒Delta " + formatQty(flow.f10.delta), 9000);
+      } else if (flow.z <= -2.5) {
+        addLogOnce("flow-sell", "sell", "<b>主动卖盘脉冲</b> · Z=" + flow.z.toFixed(2) + " · 10秒Delta " + formatQty(flow.f10.delta), 9000);
+      }
+      if (flow.sellAbsorption) {
+        addLogOnce("sell-absorb", "buy", "<b>下方吸收</b> · 主动卖出放大但价格不再有效下行。", 12000);
+      }
+      if (flow.buyAbsorption) {
+        addLogOnce("buy-absorb", "sell", "<b>上方吸收</b> · 主动买入放大但价格不再有效上行。", 12000);
+      }
+      if (book && book.changes) {
+        if (book.changes.askCancelMax >= .60) {
+          addLogOnce("ask-cancel", "buy", "<b>卖墙撤单 " + Math.round(book.changes.askCancelMax * 100) + "%</b> · " + formatPrice(book.changes.askCancelPrice), 10000);
+        }
+        if (book.changes.bidCancelMax >= .60) {
+          addLogOnce("bid-cancel", "sell", "<b>买墙撤单 " + Math.round(book.changes.bidCancelMax * 100) + "%</b> · " + formatPrice(book.changes.bidCancelPrice), 10000);
+        }
+        var megaBid = book.bidWalls.find(function (w) { return w.qty >= config.megaWallEth && w.distancePct <= .22; });
+        var megaAsk = book.askWalls.find(function (w) { return w.qty >= config.megaWallEth && w.distancePct <= .22; });
+        if (megaBid) addLogOnce("mega-bid-" + megaBid.price, "buy", "<b>下方超级买墙</b> · " + formatPrice(megaBid.price) + " · " + formatQty(megaBid.qty), 30000);
+        if (megaAsk) addLogOnce("mega-ask-" + megaAsk.price, "sell", "<b>上方超级卖墙</b> · " + formatPrice(megaAsk.price) + " · " + formatQty(megaAsk.qty), 30000);
+      }
+      if (state.lastRegimeLogged !== state.regime.confirmed) {
+        if (state.lastRegimeLogged) {
+          addLog("info", "<b>市场状态切换</b> · " + regimeLabel(state.lastRegimeLogged) + " → " + regimeLabel(state.regime.confirmed));
+        }
+        state.lastRegimeLogged = state.regime.confirmed;
+      }
+    }
+
+    function currentWallQty(book, side, price) {
+      if (!book || !price) return 0;
+      var map = side === "BUY" ? book.bids : book.asks;
+      return map.get(bucketPrice(price)) || 0;
+    }
+
+    function monitorActiveSignal(metrics, book, now) {
+      var s = state.signal;
+      if (!s) return;
+      var price = state.lastPrice;
+      var isLong = s.side === "BUY";
+      var flow = metrics.flow;
+      var changes = book && book.changes ? book.changes : {};
+      var wallNow = currentWallQty(book, s.side, s.supportWallPrice);
+      var wallWithdrawn = s.supportWallQty > 0 && wallNow / s.supportWallQty < .30;
+      var crisisFlow = isLong ?
+        (flow.z <= -2.6 && flow.ratio10 <= -.22) :
+        (flow.z >= 2.6 && flow.ratio10 >= .22);
+      var broadCancel = isLong ? changes.bidCancelMax > .70 : changes.askCancelMax > .70;
+      var hardHit = isLong ? price <= s.stop : price >= s.stop;
+      var invalidHit = isLong ? price <= s.invalid : price >= s.invalid;
+      var targetHit = isLong ? price >= s.target : price <= s.target;
+
+      if (targetHit) {
+        addLog("buy", "<b>主止盈达成</b> · " + formatPrice(s.target) + " · 实际 " + s.rr.toFixed(2) + "R");
+        state.displaySignal = Object.assign({}, s, { completed: true, completedText: "止盈达成" });
+        state.signal = null;
+        setTimeout(function () {
+          if (!state.signal && state.displaySignal && state.displaySignal.completed) state.displaySignal = null;
+        }, 9000);
+        return;
+      }
+      if (hardHit || invalidHit || wallWithdrawn || broadCancel || crisisFlow) {
+        var reason = hardHit ? "硬止损触发" :
+          invalidHit ? "结构失效价触发" :
+          wallWithdrawn || broadCancel ? (isLong ? "多头买墙大面积撤单" : "空头卖墙大面积撤单") :
+          (isLong ? "巨额主动砸盘反转" : "巨额主动买盘反转");
+        triggerCrisisExit(s, reason);
+      }
+    }
+
+    function triggerCrisisExit(signal, reason) {
+      if (!state.signal) return;
+      var exited = Object.assign({}, signal, { crisis: true, crisisReason: reason, exitAt: Date.now() });
+      state.displaySignal = exited;
+      state.signal = null;
+      addLog("exit", "<b>风险离场 EXIT</b> · " + reason + " · 当前 " + formatPrice(state.lastPrice));
+      playCrisisAlert(signal.side);
+      setTimeout(function () {
+        if (!state.signal && state.displaySignal && state.displaySignal.crisis) state.displaySignal = null;
+      }, 12000);
+    }
+
+    function confidenceLabel(score) {
+      return score >= 85 ? "高" : score >= 74 ? "中" : "低";
+    }
+
+    function renderSignal(scores, metrics, book, now) {
+      var shown = state.displaySignal || state.signal;
+      var topScore = Math.max(scores.longScore, scores.shortScore);
+      var biasSide = scores.longScore >= scores.shortScore ? "BUY" : "SELL";
+      var stateEl = els.signalState;
+      var label, css = "";
+      if (shown && shown.crisis) {
+        label = "风险离场 (EXIT)";
+        css = "exit";
+      } else if (shown && shown.completed) {
+        label = "止盈达成 (TP)";
+        css = "buy";
+      } else if (shown) {
+        label = shown.side === "BUY" ? "做多 (BUY)" : "做空 (SELL)";
+        css = shown.side === "BUY" ? "buy" : "sell";
+      } else {
+        label = "观望 (" + Math.max(0, Math.abs(scores.longScore - scores.shortScore)) + ")";
+      }
+      stateEl.textContent = label;
+      stateEl.className = "signal-state " + css;
+      var score = shown ? shown.confidence : topScore;
+      els.scoreFill.style.width = clamp(score, 0, 100) + "%";
+      els.scoreFill.style.background = shown && shown.side === "BUY" ? "var(--green)" : shown && shown.side === "SELL" ? "var(--red)" : "var(--blue)";
+      els.scoreValue.textContent = String(Math.round(score || 0));
+      els.confidenceText.textContent = confidenceLabel(score || 0);
+      els.rrText.textContent = shown && shown.rr ? shown.rr.toFixed(2) + ":1" : "动态";
+
+      var regime = state.regime.confirmed;
+      els.regimeChip.textContent = "市场：" + regimeLabel(regime);
+      els.regimeChip.className = "market-chip " + (regime.indexOf("TREND") === 0 ? "trend" : regime === "RANGE" ? "range" : "");
+      var setup = shown ? shown.setup : (biasSide === "BUY" ? scores.longSetup : scores.shortSetup);
+      els.setupChip.textContent = "策略：" + setupLabel(setup);
+      els.setupChip.className = "market-chip " + (shown && shown.crisis ? "danger" : "");
+
+      els.entryPrice.textContent = shown ? formatPrice(shown.entry) : "等待信号";
+      els.takeProfit.textContent = shown ? formatPrice(shown.target) : "等待信号";
+      els.invalidPrice.textContent = shown ? formatPrice(shown.invalid) : "等待信号";
+      els.stopLoss.textContent = shown ? formatPrice(shown.stop) : "等待信号";
+      els.runnerPrice.textContent = shown && shown.runner ? formatPrice(shown.runner) : "等待信号";
+      els.signalAge.textContent = shown ? Math.max(0, Math.floor((now - shown.createdAt) / 1000)) + "秒" : "--";
+      els.levels.classList.toggle("danger", Boolean(shown && shown.crisis));
+
+      var reasons = shown ? shown.reasons : (biasSide === "BUY" ? scores.longReasons : scores.shortReasons);
+      if (shown && shown.crisis) reasons = [shown.crisisReason, "原交易计划已失效", "等待结构重新确认"];
+      els.reasonBox.innerHTML = "<b>判断：</b>" + (reasons.length ? reasons.join(" · ") : "当前量价与结构没有形成足够一致的方向。");
+      els.panelTitle.setAttribute("data-mobile-status", label.replace(/\s*\([^)]*\)/, "") + " · " + confidenceLabel(score || 0));
+
+      els.flowValue.textContent = (metrics.flow.f10.delta >= 0 ? "+" : "") + formatQty(metrics.flow.f10.delta);
+      els.flowValue.className = "mono " + signClass(metrics.flow.f10.delta);
+      var imbalance = book ? book.imbalance : 0;
+      els.bookImbalance.textContent = (imbalance >= 0 ? "+" : "") + (imbalance * 100).toFixed(1) + "%";
+      els.bookImbalance.className = "mono " + signClass(imbalance);
+      els.fundingSlope.textContent = (metrics.fundingSlope >= 0 ? "+" : "") + metrics.fundingSlope.toFixed(3) + " bp/m";
+      els.fundingSlope.className = "mono " + signClass(metrics.fundingSlope);
+    }
+
+    function analyze() {
+      var now = Date.now();
+      captureWallSnapshot(now);
+      var metrics = computeMarketMetrics(now);
+      if (!metrics) return;
+      state.currentMetrics = metrics;
+      updateRegime(metrics, now);
+      var book = state.currentBookMetrics;
+      var scores = evaluateScores(metrics, book);
+      emitMicroAlerts(metrics, book, now);
+      monitorActiveSignal(metrics, book, now);
+      maybeTriggerSignal(scores, metrics, book, now);
+      renderSignal(scores, metrics, book, now);
+      state.lastAnalysisAt = now;
+    }
+
+    function playSignalTone(side) {
+      if (!state.alertEnabled || !state.audioContext) return;
+      try {
+        var ctx = state.audioContext;
+        var osc = ctx.createOscillator();
+        var gain = ctx.createGain();
+        osc.frequency.value = side === "BUY" ? 740 : 420;
+        gain.gain.setValueAtTime(.0001, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(.08, ctx.currentTime + .02);
+        gain.gain.exponentialRampToValueAtTime(.0001, ctx.currentTime + .22);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + .24);
+      } catch (e) {}
+    }
+
+    function playCrisisAlert(side) {
+      if (navigator.vibrate) {
+        try { navigator.vibrate([120, 80, 120, 80, 120]); } catch (e) {}
+      }
+      if (!state.alertEnabled) return;
+      try {
+        var ctx = state.audioContext;
+        [0, .24, .48].forEach(function (delay) {
+          var osc = ctx.createOscillator();
+          var gain = ctx.createGain();
+          osc.type = "square";
+          osc.frequency.value = 260;
+          gain.gain.setValueAtTime(.0001, ctx.currentTime + delay);
+          gain.gain.exponentialRampToValueAtTime(.13, ctx.currentTime + delay + .01);
+          gain.gain.exponentialRampToValueAtTime(.0001, ctx.currentTime + delay + .16);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(ctx.currentTime + delay);
+          osc.stop(ctx.currentTime + delay + .18);
+        });
+      } catch (e) {}
+      if ("speechSynthesis" in window) {
+        try {
+          speechSynthesis.cancel();
+          var text = side === "BUY" ? "注意，多头主力撤单，立刻离场" : "注意，空头主力撤单，立刻离场";
+          var utter = new SpeechSynthesisUtterance(text);
+          utter.lang = "zh-CN";
+          utter.rate = 1.03;
+          utter.volume = 1;
+          speechSynthesis.speak(utter);
+        } catch (e) {}
+      }
+    }
+
+    async function enableAlerts() {
+      try {
+        if (!state.audioContext) {
+          var AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (AudioCtx) state.audioContext = new AudioCtx();
+        }
+        if (state.audioContext && state.audioContext.state === "suspended") await state.audioContext.resume();
+        state.alertEnabled = true;
+        els.alertBtn.classList.add("active");
+        els.alertBtn.innerHTML = "🔔 <span>警报已启用</span>";
+        playSignalTone("BUY");
+        showToast("声音、语音与支持设备的振动警报已启用");
+      } catch (e) {
+        showToast("浏览器未允许声音警报", "warn");
+      }
+    }
+
+    function indicatorSeries(candles) {
+      var closes = candles.map(function (c) { return c.c; });
+      var e21 = ema(closes, 21);
+      var e50 = ema(closes, 50);
+      var vwap = [];
+      var pv = 0, vol = 0;
+      candles.forEach(function (c, i) {
+        pv += ((c.h + c.l + c.c) / 3) * c.v;
+        vol += c.v;
+        vwap[i] = vol ? pv / vol : c.c;
+      });
+      return { e21: e21, e50: e50, vwap: vwap };
+    }
+
+    function niceStep(range, targetTicks) {
+      if (!range) return 1;
+      var rough = range / targetTicks;
+      var power = Math.pow(10, Math.floor(Math.log10(rough)));
+      var scaled = rough / power;
+      var nice = scaled < 1.5 ? 1 : scaled < 3 ? 2 : scaled < 7 ? 5 : 10;
+      return nice * power;
+    }
+
+    function drawChart() {
+      var canvas = els.chartCanvas;
+      var wrap = els.chartWrap;
+      if (!canvas || !wrap) return;
+      var rect = wrap.getBoundingClientRect();
+      if (rect.width < 20 || rect.height < 20) return;
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      var w = Math.floor(rect.width), h = Math.floor(rect.height);
+      if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+      }
+      var ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      var candles = aggregateCandles(state.selectedTf);
+      if (!candles.length) return;
+      var chart = state.chart;
+      var rightPad = w < 520 ? 56 : 66;
+      var leftPad = 8, topPad = 26, bottomPad = 22;
+      var lowerH = Math.max(72, h * .20);
+      var mainBottom = h - lowerH - bottomPad;
+      var plotW = w - leftPad - rightPad;
+      var visible = clamp(Math.round(chart.visibleCount), 35, 260);
+      var end = Math.max(visible, candles.length - Math.max(0, Math.round(chart.offset)));
+      end = Math.min(candles.length, end);
+      var start = Math.max(0, end - visible);
+      var rows = candles.slice(start, end);
+      if (!rows.length) return;
+      var inds = indicatorSeries(candles);
+      var vals = [];
+      rows.forEach(function (c) { vals.push(c.h, c.l); });
+      var shown = state.displaySignal || state.signal;
+      if (shown) vals.push(shown.entry, shown.invalid, shown.stop, shown.target, shown.runner);
+      var pMin = Math.min.apply(null, vals.filter(function (v) { return v > 0; }));
+      var pMax = Math.max.apply(null, vals);
+      var pad = Math.max((pMax - pMin) * .10, (state.currentMetrics ? state.currentMetrics.atr1 : 1) * .25, .5);
+      pMin -= pad; pMax += pad;
+      var priceToY = function (p) { return topPad + (pMax - p) / (pMax - pMin) * (mainBottom - topPad); };
+      var xStep = plotW / rows.length;
+      var indexToX = function (i) { return leftPad + (i - start + .5) * xStep; };
+
+      ctx.strokeStyle = "rgba(255,255,255,.055)";
+      ctx.fillStyle = "#727b8d";
+      ctx.font = "9px Cascadia Mono, Consolas, monospace";
+      ctx.lineWidth = 1;
+      var step = niceStep(pMax - pMin, 7);
+      var first = Math.ceil(pMin / step) * step;
+      for (var p = first; p <= pMax; p += step) {
+        var y = priceToY(p);
+        ctx.beginPath(); ctx.moveTo(leftPad, y); ctx.lineTo(w - rightPad, y); ctx.stroke();
+        ctx.fillText(formatPrice(p), w - rightPad + 6, y + 3);
+      }
+      var timeLines = 6;
+      for (var g = 0; g <= timeLines; g++) {
+        var gx = leftPad + plotW * g / timeLines;
+        ctx.beginPath(); ctx.moveTo(gx, topPad); ctx.lineTo(gx, h - bottomPad); ctx.stroke();
+      }
+
+      var maxVol = Math.max.apply(null, rows.map(function (c) { return c.v; })) || 1;
+      var cvd = 0;
+      var cvdVals = rows.map(function (c) { cvd += c.d || 0; return cvd; });
+      var cvdMin = Math.min.apply(null, cvdVals), cvdMax = Math.max.apply(null, cvdVals);
+      var cvdRange = cvdMax - cvdMin || 1;
+      rows.forEach(function (c, i) {
+        var x = leftPad + (i + .5) * xStep;
+        var openY = priceToY(c.o), closeY = priceToY(c.c);
+        var highY = priceToY(c.h), lowY = priceToY(c.l);
+        var up = c.c >= c.o;
+        var color = up ? "#00f5a0" : "#ff416c";
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.moveTo(x, highY); ctx.lineTo(x, lowY); ctx.stroke();
+        var bodyW = Math.max(1, Math.min(xStep * .68, 10));
+        var bodyY = Math.min(openY, closeY);
+        var bodyH = Math.max(1, Math.abs(closeY - openY));
+        if (up) {
+          ctx.globalAlpha = .80;
+          ctx.strokeRect(x - bodyW / 2, bodyY, bodyW, bodyH);
+        } else {
+          ctx.globalAlpha = .78;
+          ctx.fillRect(x - bodyW / 2, bodyY, bodyW, bodyH);
+        }
+        ctx.globalAlpha = .28;
+        var volH = (c.v / maxVol) * (lowerH * .48);
+        ctx.fillRect(x - bodyW / 2, h - bottomPad - volH, bodyW, volH);
+        ctx.globalAlpha = 1;
+      });
+
+      function drawLine(values, color, width) {
+        ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
+        var started = false;
+        for (var i = start; i < end; i++) {
+          var v = values[i];
+          if (!Number.isFinite(v)) continue;
+          var x = indexToX(i), y = priceToY(v);
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      drawLine(inds.e21, "#f2c14e", 1.15);
+      drawLine(inds.e50, "#a06cff", 1.15);
+      drawLine(inds.vwap, "#4c9dff", 1.05);
+
+      var cvdTop = mainBottom + 16;
+      var cvdBottom = h - bottomPad - lowerH * .48;
+      ctx.strokeStyle = "rgba(76,157,255,.9)";
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      cvdVals.forEach(function (v, i) {
+        var x = leftPad + (i + .5) * xStep;
+        var y = cvdTop + (cvdMax - v) / cvdRange * Math.max(18, cvdBottom - cvdTop);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.fillStyle = "#6f788a";
+      ctx.fillText("CVD", leftPad + 3, cvdTop - 4);
+
+      if (state.currentBookMetrics) {
+        var walls = state.currentBookMetrics.bidWalls.slice(0, 3).concat(state.currentBookMetrics.askWalls.slice(0, 3));
+        walls.forEach(function (wall) {
+          if (wall.price < pMin || wall.price > pMax) return;
+          var y = priceToY(wall.price);
+          var bid = wall.side === "BID";
+          ctx.strokeStyle = bid ? "rgba(0,245,160,.38)" : "rgba(255,65,108,.38)";
+          ctx.setLineDash([4, 5]);
+          ctx.beginPath(); ctx.moveTo(w - rightPad - Math.min(plotW * .32, 220), y); ctx.lineTo(w - rightPad, y); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = bid ? "#00d88e" : "#f75b78";
+          ctx.fillText((bid ? "买墙 " : "卖墙 ") + formatQty(wall.qty), w - rightPad - Math.min(plotW * .31, 212), y - 3);
+        });
+      }
+
+      if (shown) {
+        var lineDefs = [
+          { p: shown.entry, c: "#e8edf5", n: "入场" },
+          { p: shown.invalid, c: "#ff8a4c", n: "失效" },
+          { p: shown.stop, c: "#ff416c", n: "SL" },
+          { p: shown.target, c: "#00f5a0", n: "TP1" },
+          { p: shown.runner, c: "#4c9dff", n: "Runner" }
+        ];
+        lineDefs.forEach(function (line) {
+          if (!line.p || line.p < pMin || line.p > pMax) return;
+          var y = priceToY(line.p);
+          ctx.strokeStyle = line.c;
+          ctx.globalAlpha = .8;
+          ctx.setLineDash(line.n === "入场" ? [] : [6, 4]);
+          ctx.beginPath(); ctx.moveTo(leftPad, y); ctx.lineTo(w - rightPad, y); ctx.stroke();
+          ctx.setLineDash([]); ctx.globalAlpha = 1;
+          ctx.fillStyle = line.c;
+          ctx.fillText(line.n + " " + formatPrice(line.p), leftPad + 5, y - 4);
+        });
+      }
+
+      var tickEvery = Math.max(1, Math.floor(rows.length / 5));
+      rows.forEach(function (c, i) {
+        if (i % tickEvery !== 0 && i !== rows.length - 1) return;
+        var x = leftPad + (i + .5) * xStep;
+        var d = new Date(c.t);
+        var label = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+        ctx.fillStyle = "#687184";
+        ctx.fillText(label, clamp(x - 15, leftPad, w - rightPad - 32), h - 6);
+      });
+
+      if (chart.crosshair && chart.crosshair.x >= leftPad && chart.crosshair.x <= w - rightPad) {
+        ctx.strokeStyle = "rgba(205,213,225,.35)";
+        ctx.setLineDash([3, 4]);
+        ctx.beginPath(); ctx.moveTo(chart.crosshair.x, topPad); ctx.lineTo(chart.crosshair.x, h - bottomPad); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(leftPad, chart.crosshair.y); ctx.lineTo(w - rightPad, chart.crosshair.y); ctx.stroke();
+        ctx.setLineDash([]);
+        var ci = clamp(Math.floor((chart.crosshair.x - leftPad) / xStep), 0, rows.length - 1);
+        updateOhlc(rows[ci]);
+      } else {
+        updateOhlc(rows[rows.length - 1]);
+      }
+    }
+
+    function updateOhlc(c) {
+      if (!c) return;
+      els.ohlcO.textContent = formatPrice(c.o);
+      els.ohlcH.textContent = formatPrice(c.h);
+      els.ohlcL.textContent = formatPrice(c.l);
+      els.ohlcC.textContent = formatPrice(c.c);
+      els.ohlcV.textContent = formatCompact(c.v);
+    }
+
+    function bindChartInteractions() {
+      var wrap = els.chartWrap;
+      wrap.addEventListener("wheel", function (e) {
+        e.preventDefault();
+        state.chart.visibleCount = clamp(state.chart.visibleCount * (e.deltaY > 0 ? 1.12 : .89), 35, 260);
+        drawChart();
+      }, { passive: false });
+      wrap.addEventListener("pointerdown", function (e) {
+        state.chart.dragging = true;
+        state.chart.dragStartX = e.clientX;
+        state.chart.dragOffset = state.chart.offset;
+        wrap.setPointerCapture(e.pointerId);
+      });
+      wrap.addEventListener("pointermove", function (e) {
+        var rect = wrap.getBoundingClientRect();
+        state.chart.crosshair = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        if (state.chart.dragging) {
+          var step = Math.max(3, (rect.width - 66) / state.chart.visibleCount);
+          state.chart.offset = clamp(state.chart.dragOffset + (e.clientX - state.chart.dragStartX) / step, 0, Math.max(0, aggregateCandles(state.selectedTf).length - 20));
+          if (state.chart.offset > 1) config.autoScroll = false;
+        }
+        drawChart();
+      });
+      function endPointer(e) {
+        state.chart.dragging = false;
+        try { wrap.releasePointerCapture(e.pointerId); } catch (err) {}
+      }
+      wrap.addEventListener("pointerup", endPointer);
+      wrap.addEventListener("pointercancel", endPointer);
+      wrap.addEventListener("pointerleave", function () {
+        if (!state.chart.dragging) {
+          state.chart.crosshair = null;
+          drawChart();
+        }
+      });
+      wrap.addEventListener("dblclick", function () {
+        state.chart.offset = 0;
+        config.autoScroll = true;
+        showToast("已回到最新K线");
+        drawChart();
+      });
+
+      var touches = new Map();
+      wrap.addEventListener("pointerdown", function (e) {
+        if (e.pointerType === "touch") touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2) {
+          var a = Array.from(touches.values());
+          state.chart.pinchDistance = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+        }
+      });
+      wrap.addEventListener("pointermove", function (e) {
+        if (e.pointerType !== "touch" || !touches.has(e.pointerId)) return;
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2) {
+          var a = Array.from(touches.values());
+          var dist = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+          if (state.chart.pinchDistance > 0) {
+            state.chart.visibleCount = clamp(state.chart.visibleCount * state.chart.pinchDistance / dist, 35, 260);
+          }
+          state.chart.pinchDistance = dist;
+          drawChart();
+        }
+      });
+      ["pointerup", "pointercancel"].forEach(function (name) {
+        wrap.addEventListener(name, function (e) {
+          touches.delete(e.pointerId);
+          if (touches.size < 2) state.chart.pinchDistance = 0;
+        });
+      });
+    }
+
+    function renderStatusClock() {
+      var now = Date.now();
+      els.clockText.textContent = formatTime(now);
+      var price = state.lastPrice || state.markPrice;
+      els.topPrice.textContent = formatPrice(price);
+      if (state.candles1m.length > 1) {
+        var dayRows = state.candles1m.slice(-1440);
+        var open = dayRows.length ? dayRows[0].o : price;
+        var change = open ? (price - open) / open * 100 : 0;
+        els.topChange.textContent = (change >= 0 ? "+" : "") + change.toFixed(2) + "%";
+        els.topChange.className = change >= 0 ? "up" : "down";
+      }
+      var age = state.wsOpen ? now - state.lastWsMessageAt : now - state.book.lastEventAt;
+      els.latencyText.textContent = "数据龄：" + (Number.isFinite(age) && age < 999999 ? Math.max(0, age / 1000).toFixed(1) + "s" : "--");
+      els.bookStatus.textContent = "盘口：" + (state.book.synced ? (state.currentBookMetrics ? "墙阈值 " + Math.round(state.currentBookMetrics.threshold) + " ETH" : "已同步") : "重建中");
+      if (state.wsOpen && now - state.lastWsMessageAt > config.staleMs) {
+        try { state.ws.close(); } catch (e) {}
+      }
+    }
+
+    function initSettings() {
+      function fill() {
+        els.riskProfile.value = config.riskProfile;
+        els.bookBinInput.value = config.bookBin;
+        els.wallFloorInput.value = config.wallFloorEth;
+        els.megaWallInput.value = config.megaWallEth;
+        els.signalThresholdInput.value = config.signalThreshold;
+        els.autoScrollSelect.value = String(Boolean(config.autoScroll));
+      }
+      els.settingsBtn.addEventListener("click", function () { fill(); els.settingsDialog.showModal(); });
+      els.closeSettings.addEventListener("click", function () { els.settingsDialog.close(); });
+      els.resetSettings.addEventListener("click", function () {
+        config = Object.assign({}, DEFAULT_CONFIG);
+        fill();
+      });
+      els.saveSettings.addEventListener("click", function () {
+        config.riskProfile = els.riskProfile.value;
+        config.bookBin = clamp(num(els.bookBinInput.value, .1), .05, 2);
+        config.wallFloorEth = clamp(num(els.wallFloorInput.value, 40), 5, 5000);
+        config.megaWallEth = clamp(num(els.megaWallInput.value, 2000), 100, 20000);
+        config.signalThreshold = clamp(num(els.signalThresholdInput.value, 72), 55, 90);
+        config.autoScroll = els.autoScrollSelect.value === "true";
+        try {
+          localStorage.setItem("ethAnalyzerConfig", JSON.stringify(config));
+        } catch (e) {
+          addLog("warn", "<b>本地参数无法持久保存</b>，本次打开仍然有效。");
+        }
+        state.wallHistory.length = 0;
+        els.settingsDialog.close();
+        showToast("策略参数已保存并应用");
+      });
+    }
+
+    function bindUi() {
+      document.querySelectorAll(".tf-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          document.querySelectorAll(".tf-btn").forEach(function (b) { b.classList.remove("active"); });
+          btn.classList.add("active");
+          state.selectedTf = num(btn.getAttribute("data-tf"), 1);
+          els.periodTag.textContent = state.selectedTf + "分钟";
+          state.chart.offset = 0;
+          drawChart();
+        });
+      });
+      els.alertBtn.addEventListener("click", enableAlerts);
+      function togglePanel() { els.signalPanel.classList.toggle("expanded"); }
+      els.mobileHandle.addEventListener("click", togglePanel);
+      els.panelHead.addEventListener("click", function () {
+        if (window.innerWidth <= 820) togglePanel();
+      });
+      window.addEventListener("resize", drawChart);
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden && !state.wsOpen) connectWebSocket();
+      });
+      initSettings();
+      bindChartInteractions();
+    }
+
+    function cacheElements() {
+      [
+        "toast","topPrice","topChange","connectionDot","connectionText","alertBtn","settingsBtn",
+        "chartWrap","chartCanvas","chartLoading","chartWarning","ohlcO","ohlcH","ohlcL","ohlcC","ohlcV",
+        "toolbarNote","signalPanel","mobileHandle","panelHead","panelTitle","periodTag","scoreFill","scoreValue",
+        "signalState","regimeChip","setupChip","confidenceText","rrText","levels","entryPrice","takeProfit",
+        "invalidPrice","stopLoss","runnerPrice","signalAge","flowValue","bookImbalance","fundingSlope","reasonBox",
+        "signalLog","bookStatus","latencyText","clockText","settingsDialog","closeSettings","riskProfile",
+        "bookBinInput","wallFloorInput","megaWallInput","signalThresholdInput","autoScrollSelect","resetSettings","saveSettings"
+      ].forEach(function (id) { els[id] = $(id); });
+    }
+
+    async function init() {
+      cacheElements();
+      renderLogs();
+      bindUi();
+      addLog("info", "<b>系统启动</b> · 原始0.01报价，0.1 USDT盘口分桶。");
+      loadInitialKlines();
+      connectWebSocket();
+      setInterval(function () {
+        try {
+          analyze();
+          renderStatusClock();
+          if (config.autoScroll) state.chart.offset = 0;
+          drawChart();
+        } catch (e) {
+          if (!state.errors.length || state.errors[state.errors.length - 1] !== e.message) {
+            state.errors.push(e.message);
+            state.errors = state.errors.slice(-10);
+            addLog("warn", "<b>计算保护</b>：" + e.message);
+          }
+        }
+      }, 1000);
+      setInterval(renderStatusClock, 250);
+    }
+
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+    else init();
+  })();
+  </script>
+</body>
+</html>
