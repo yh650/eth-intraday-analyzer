@@ -618,7 +618,7 @@
           </div>
           <div id="chartLoading" class="chart-loading">正在加载币安历史K线与盘口…</div>
           <div id="chartWarning" class="chart-warning hidden">实时流不可达，正在使用REST降级模式</div>
-          <div class="chart-hint">滚轮缩放 · 拖动回看 · 双击回到最新</div>
+          <div class="chart-hint">滚轮缩放 · 拖动回看 · 右侧价格轴上下拖动 · 双击复位</div>
         </div>
       </section>
 
@@ -731,6 +731,8 @@
     var WS_BASE = "wss://fstream.binance.com/stream?streams=";
     var STREAMS = [
       "ethusdt@aggTrade",
+      "ethusdt@bookTicker",
+      "ethusdt@ticker",
       "ethusdt@depth@100ms",
       "ethusdt@markPrice@1s",
       "ethusdt@kline_1m",
@@ -747,6 +749,7 @@
       autoScroll: true,
       maxBookDistancePct: 0.45,
       staleMs: 6500,
+      priceStaleMs: 6500,
       cooldownMs: 45000
     };
 
@@ -765,6 +768,10 @@
       candles1m: [],
       selectedTf: 1,
       lastPrice: 0,
+      lastPriceEventAt: 0,
+      lastTradeEventAt: 0,
+      lastKlineEventAt: 0,
+      dayChangePct: null,
       markPrice: 0,
       indexPrice: 0,
       priceHistory: [],
@@ -817,10 +824,16 @@
       lastRegimeLogged: "",
       chart: {
         visibleCount: 115,
+        futureBars: 18,
         offset: 0,
         dragStartX: 0,
         dragOffset: 0,
         dragging: false,
+        priceDragging: false,
+        priceDragStartY: 0,
+        priceDragStartScale: 1,
+        priceScale: 1,
+        priceOffset: 0,
         crosshair: null,
         pinchDistance: 0
       },
@@ -1072,6 +1085,33 @@
       fetchBookSnapshot(state.wsOpen ? "WS" : "REST");
     }
 
+    function updateCurrentCandleFromPrice(price, eventTime) {
+      var list = state.candles1m;
+      if (!list.length || !price) return;
+      var bucket = Math.floor((eventTime || Date.now()) / 60000) * 60000;
+      var last = list[list.length - 1];
+      if (bucket > last.t) {
+        last.closed = true;
+        list.push({ t: bucket, o: last.c, h: price, l: price, c: price, v: 0, d: 0, closed: false });
+        if (list.length > 1600) list.splice(0, list.length - 1600);
+      } else if (bucket === last.t) {
+        last.h = Math.max(last.h, price);
+        last.l = Math.min(last.l, price);
+        last.c = price;
+        last.closed = false;
+      }
+    }
+
+    function updateLivePrice(price, eventTime, source) {
+      if (!price || !Number.isFinite(price)) return;
+      var receivedAt = Date.now();
+      state.lastPrice = price;
+      state.lastPriceEventAt = receivedAt;
+      if (source === "TRADE") state.lastTradeEventAt = receivedAt;
+      if (source === "KLINE") state.lastKlineEventAt = receivedAt;
+      updateCurrentCandleFromPrice(price, eventTime || receivedAt);
+    }
+
     function processTrade(d) {
       var id = num(d.a, -1);
       if (id >= 0 && id <= state.lastAggId) return;
@@ -1081,7 +1121,7 @@
       var time = num(d.T || d.E || Date.now());
       var sellTaker = Boolean(d.m);
       if (!price || !qty) return;
-      state.lastPrice = price;
+      updateLivePrice(price, time, "TRADE");
       var delta = sellTaker ? -qty : qty;
       state.cvd += delta;
       var sec = Math.floor(time / 1000) * 1000;
@@ -1120,7 +1160,22 @@
         index: state.indexPrice,
         premium: state.indexPrice ? (state.markPrice - state.indexPrice) / state.indexPrice : 0
       });
+      if (!state.lastPriceEventAt || Date.now() - state.lastPriceEventAt > 1500) {
+        updateLivePrice(state.markPrice, t, "MARK");
+      }
       pruneRealtimeBuffers(t);
+    }
+
+    function processBookTicker(d) {
+      var bid = num(d.b);
+      var ask = num(d.a);
+      var price = bid && ask ? (bid + ask) / 2 : bid || ask;
+      updateLivePrice(price, num(d.E || Date.now()), "BOOK");
+    }
+
+    function processTicker(d) {
+      state.dayChangePct = Number.isFinite(Number(d.P)) ? Number(d.P) : state.dayChangePct;
+      updateLivePrice(num(d.c), num(d.E || Date.now()), "TICKER");
     }
 
     function processKline(d) {
@@ -1137,7 +1192,7 @@
         list.push(candle);
         if (list.length > 1600) list.splice(0, list.length - 1600);
       }
-      state.lastPrice = candle.c || state.lastPrice;
+      updateLivePrice(candle.c, num(d.E || k.T || Date.now()), "KLINE");
     }
 
     function processLiquidation(d) {
@@ -1196,6 +1251,8 @@
         var stream = packet.stream || "";
         var d = packet.data || packet;
         if (stream.indexOf("@aggTrade") >= 0 || d.e === "aggTrade") processTrade(d);
+        else if (stream.indexOf("@bookTicker") >= 0 || d.e === "bookTicker") processBookTicker(d);
+        else if (stream.indexOf("@ticker") >= 0 || d.e === "24hrTicker") processTicker(d);
         else if (stream.indexOf("@depth") >= 0 || d.e === "depthUpdate") handleDepth(d);
         else if (stream.indexOf("@markPrice") >= 0 || d.e === "markPriceUpdate") processMark(d);
         else if (stream.indexOf("@kline") >= 0 || d.e === "kline") processKline(d);
@@ -2136,9 +2193,11 @@
       var mainBottom = h - lowerH - bottomPad;
       var plotW = w - leftPad - rightPad;
       var visible = clamp(Math.round(chart.visibleCount), 35, 260);
-      var end = Math.max(visible, candles.length - Math.max(0, Math.round(chart.offset)));
+      var futureBars = clamp(Math.round(chart.futureBars), 8, Math.min(40, visible - 20));
+      var pastSlots = Math.max(20, visible - futureBars);
+      var end = Math.max(pastSlots, candles.length - Math.max(0, Math.round(chart.offset)));
       end = Math.min(candles.length, end);
-      var start = Math.max(0, end - visible);
+      var start = Math.max(0, end - pastSlots);
       var rows = candles.slice(start, end);
       if (!rows.length) return;
       var inds = indicatorSeries(candles);
@@ -2146,18 +2205,28 @@
       rows.forEach(function (c) { vals.push(c.h, c.l); });
       var shown = state.displaySignal || state.signal;
       if (shown) vals.push(shown.entry, shown.invalid, shown.stop, shown.target, shown.runner);
-      var pMin = Math.min.apply(null, vals.filter(function (v) { return v > 0; }));
-      var pMax = Math.max.apply(null, vals);
-      var pad = Math.max((pMax - pMin) * .10, (state.currentMetrics ? state.currentMetrics.atr1 : 1) * .25, .5);
-      pMin -= pad; pMax += pad;
+      var autoMin = Math.min.apply(null, vals.filter(function (v) { return v > 0; }));
+      var autoMax = Math.max.apply(null, vals);
+      var pad = Math.max((autoMax - autoMin) * .10, (state.currentMetrics ? state.currentMetrics.atr1 : 1) * .25, .5);
+      autoMin -= pad; autoMax += pad;
+      var autoRange = Math.max(autoMax - autoMin, .01);
+      var autoCenter = (autoMax + autoMin) / 2;
+      var scaledRange = autoRange * clamp(chart.priceScale, .25, 8);
+      var scaledCenter = autoCenter + chart.priceOffset * autoRange;
+      var pMin = scaledCenter - scaledRange / 2;
+      var pMax = scaledCenter + scaledRange / 2;
       var priceToY = function (p) { return topPad + (pMax - p) / (pMax - pMin) * (mainBottom - topPad); };
-      var xStep = plotW / rows.length;
+      var xStep = plotW / visible;
       var indexToX = function (i) { return leftPad + (i - start + .5) * xStep; };
+      var futureStartX = leftPad + rows.length * xStep;
 
       ctx.strokeStyle = "rgba(255,255,255,.055)";
       ctx.fillStyle = "#727b8d";
       ctx.font = "9px Cascadia Mono, Consolas, monospace";
       ctx.lineWidth = 1;
+      ctx.fillStyle = "rgba(8,11,16,.92)";
+      ctx.fillRect(w - rightPad, topPad, rightPad, mainBottom - topPad);
+      ctx.fillStyle = "#727b8d";
       var step = niceStep(pMax - pMin, 7);
       var first = Math.ceil(pMin / step) * step;
       for (var p = first; p <= pMax; p += step) {
@@ -2170,6 +2239,14 @@
         var gx = leftPad + plotW * g / timeLines;
         ctx.beginPath(); ctx.moveTo(gx, topPad); ctx.lineTo(gx, h - bottomPad); ctx.stroke();
       }
+      ctx.fillStyle = "rgba(76,157,255,.018)";
+      ctx.fillRect(futureStartX, topPad, Math.max(0, w - rightPad - futureStartX), mainBottom - topPad);
+      ctx.strokeStyle = "rgba(76,157,255,.22)";
+      ctx.setLineDash([4, 5]);
+      ctx.beginPath(); ctx.moveTo(futureStartX, topPad); ctx.lineTo(futureStartX, mainBottom); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(111,120,138,.72)";
+      ctx.fillText("未来", Math.min(futureStartX + 6, w - rightPad - 28), topPad + 12);
 
       var maxVol = Math.max.apply(null, rows.map(function (c) { return c.v; })) || 1;
       var cvd = 0;
@@ -2267,15 +2344,41 @@
         });
       }
 
-      var tickEvery = Math.max(1, Math.floor(rows.length / 5));
-      rows.forEach(function (c, i) {
-        if (i % tickEvery !== 0 && i !== rows.length - 1) return;
-        var x = leftPad + (i + .5) * xStep;
-        var d = new Date(c.t);
+      var livePrice = state.lastPrice || rows[rows.length - 1].c;
+      if (livePrice >= pMin && livePrice <= pMax) {
+        var liveY = priceToY(livePrice);
+        var liveUp = livePrice >= rows[rows.length - 1].o;
+        var liveColor = liveUp ? "#00d88e" : "#f75b78";
+        ctx.strokeStyle = liveColor;
+        ctx.globalAlpha = .82;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.moveTo(leftPad, liveY); ctx.lineTo(w - rightPad, liveY); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        var liveLabel = formatPrice(livePrice);
+        var labelW = Math.max(rightPad - 5, ctx.measureText(liveLabel).width + 12);
+        ctx.fillStyle = liveColor;
+        ctx.fillRect(w - labelW, liveY - 8, labelW, 16);
+        ctx.fillStyle = "#06110d";
+        ctx.font = "bold 10px Cascadia Mono, Consolas, monospace";
+        ctx.fillText(liveLabel, w - labelW + 5, liveY + 3.5);
+        ctx.font = "9px Cascadia Mono, Consolas, monospace";
+      }
+
+      var tfMs = state.selectedTf * 60000;
+      var timeLabelCount = w < 520 ? 4 : 6;
+      for (var ti = 0; ti <= timeLabelCount; ti++) {
+        var slot = Math.min(visible - 1, Math.round((visible - 1) * ti / timeLabelCount));
+        var baseLast = rows[rows.length - 1];
+        var timestamp = slot < rows.length
+          ? rows[slot].t
+          : baseLast.t + (slot - rows.length + 1) * tfMs;
+        var x = leftPad + (slot + .5) * xStep;
+        var d = new Date(timestamp);
         var label = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
-        ctx.fillStyle = "#687184";
+        ctx.fillStyle = slot >= rows.length ? "#4c6688" : "#687184";
         ctx.fillText(label, clamp(x - 15, leftPad, w - rightPad - 32), h - 6);
-      });
+      }
 
       if (chart.crosshair && chart.crosshair.x >= leftPad && chart.crosshair.x <= w - rightPad) {
         ctx.strokeStyle = "rgba(205,213,225,.35)";
@@ -2301,43 +2404,80 @@
 
     function bindChartInteractions() {
       var wrap = els.chartWrap;
+      function geometry() {
+        var rect = wrap.getBoundingClientRect();
+        var rightPad = rect.width < 520 ? 56 : 66;
+        return { rect: rect, axisLeft: rect.width - rightPad, rightPad: rightPad };
+      }
+      function isPriceAxis(clientX) {
+        var g = geometry();
+        return clientX - g.rect.left >= g.axisLeft;
+      }
       wrap.addEventListener("wheel", function (e) {
         e.preventDefault();
-        state.chart.visibleCount = clamp(state.chart.visibleCount * (e.deltaY > 0 ? 1.12 : .89), 35, 260);
+        if (isPriceAxis(e.clientX)) {
+          state.chart.priceScale = clamp(state.chart.priceScale * (e.deltaY > 0 ? 1.12 : .89), .25, 8);
+        } else {
+          state.chart.visibleCount = clamp(state.chart.visibleCount * (e.deltaY > 0 ? 1.12 : .89), 35, 260);
+        }
         drawChart();
       }, { passive: false });
       wrap.addEventListener("pointerdown", function (e) {
-        state.chart.dragging = true;
-        state.chart.dragStartX = e.clientX;
-        state.chart.dragOffset = state.chart.offset;
+        if (isPriceAxis(e.clientX)) {
+          state.chart.priceDragging = true;
+          state.chart.priceDragStartY = e.clientY;
+          state.chart.priceDragStartScale = state.chart.priceScale;
+          state.chart.dragging = false;
+          wrap.style.cursor = "ns-resize";
+        } else {
+          state.chart.dragging = true;
+          state.chart.dragStartX = e.clientX;
+          state.chart.dragOffset = state.chart.offset;
+          state.chart.priceDragging = false;
+        }
         wrap.setPointerCapture(e.pointerId);
       });
       wrap.addEventListener("pointermove", function (e) {
         var rect = wrap.getBoundingClientRect();
         state.chart.crosshair = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-        if (state.chart.dragging) {
-          var step = Math.max(3, (rect.width - 66) / state.chart.visibleCount);
+        if (state.chart.priceDragging) {
+          var deltaY = e.clientY - state.chart.priceDragStartY;
+          state.chart.priceScale = clamp(state.chart.priceDragStartScale * Math.exp(deltaY * .008), .25, 8);
+          wrap.style.cursor = "ns-resize";
+        } else if (state.chart.dragging) {
+          var rightPad = rect.width < 520 ? 56 : 66;
+          var step = Math.max(3, (rect.width - rightPad - 8) / state.chart.visibleCount);
           state.chart.offset = clamp(state.chart.dragOffset + (e.clientX - state.chart.dragStartX) / step, 0, Math.max(0, aggregateCandles(state.selectedTf).length - 20));
           if (state.chart.offset > 1) config.autoScroll = false;
+        } else {
+          wrap.style.cursor = isPriceAxis(e.clientX) ? "ns-resize" : "crosshair";
         }
         drawChart();
       });
       function endPointer(e) {
         state.chart.dragging = false;
+        state.chart.priceDragging = false;
         try { wrap.releasePointerCapture(e.pointerId); } catch (err) {}
       }
       wrap.addEventListener("pointerup", endPointer);
       wrap.addEventListener("pointercancel", endPointer);
       wrap.addEventListener("pointerleave", function () {
-        if (!state.chart.dragging) {
+        if (!state.chart.dragging && !state.chart.priceDragging) {
           state.chart.crosshair = null;
+          wrap.style.cursor = "default";
           drawChart();
         }
       });
-      wrap.addEventListener("dblclick", function () {
-        state.chart.offset = 0;
-        config.autoScroll = true;
-        showToast("已回到最新K线");
+      wrap.addEventListener("dblclick", function (e) {
+        if (isPriceAxis(e.clientX)) {
+          state.chart.priceScale = 1;
+          state.chart.priceOffset = 0;
+          showToast("价格轴已恢复自动比例");
+        } else {
+          state.chart.offset = 0;
+          config.autoScroll = true;
+          showToast("已回到最新K线");
+        }
         drawChart();
       });
 
@@ -2346,6 +2486,8 @@
         if (e.pointerType === "touch") touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (touches.size === 2) {
           var a = Array.from(touches.values());
+          state.chart.dragging = false;
+          state.chart.priceDragging = false;
           state.chart.pinchDistance = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
         }
       });
@@ -2375,17 +2517,24 @@
       els.clockText.textContent = formatTime(now);
       var price = state.lastPrice || state.markPrice;
       els.topPrice.textContent = formatPrice(price);
-      if (state.candles1m.length > 1) {
+      if (Number.isFinite(state.dayChangePct)) {
+        var tickerChange = state.dayChangePct;
+        els.topChange.textContent = (tickerChange >= 0 ? "+" : "") + tickerChange.toFixed(2) + "%";
+        els.topChange.className = tickerChange >= 0 ? "up" : "down";
+      } else if (state.candles1m.length > 1) {
         var dayRows = state.candles1m.slice(-1440);
         var open = dayRows.length ? dayRows[0].o : price;
         var change = open ? (price - open) / open * 100 : 0;
         els.topChange.textContent = (change >= 0 ? "+" : "") + change.toFixed(2) + "%";
         els.topChange.className = change >= 0 ? "up" : "down";
       }
-      var age = state.wsOpen ? now - state.lastWsMessageAt : now - state.book.lastEventAt;
+      var age = state.lastPriceEventAt ? now - state.lastPriceEventAt : (state.wsOpen ? now - state.lastWsMessageAt : now - state.book.lastEventAt);
       els.latencyText.textContent = "数据龄：" + (Number.isFinite(age) && age < 999999 ? Math.max(0, age / 1000).toFixed(1) + "s" : "--");
       els.bookStatus.textContent = "盘口：" + (state.book.synced ? (state.currentBookMetrics ? "墙阈值 " + Math.round(state.currentBookMetrics.threshold) + " ETH" : "已同步") : "重建中");
-      if (state.wsOpen && now - state.lastWsMessageAt > config.staleMs) {
+      var streamStale = state.wsOpen && now - state.lastWsMessageAt > config.staleMs;
+      var priceReference = state.lastPriceEventAt || state.lastWsMessageAt;
+      var priceStale = state.wsOpen && priceReference && now - priceReference > config.priceStaleMs;
+      if (streamStale || priceStale) {
         try { state.ws.close(); } catch (e) {}
       }
     }
@@ -2481,7 +2630,10 @@
           }
         }
       }, 1000);
-      setInterval(renderStatusClock, 250);
+      setInterval(function () {
+        renderStatusClock();
+        drawChart();
+      }, 250);
     }
 
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
