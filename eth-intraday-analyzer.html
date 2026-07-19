@@ -816,6 +816,8 @@
       transport: "INIT",
       restTimers: [],
       restFallback: false,
+      tradePollPending: false,
+      klinePollPending: false,
       alertEnabled: false,
       audioContext: null,
       lastAnalysisAt: 0,
@@ -1301,10 +1303,15 @@
     }
 
     async function pollRestTrades() {
+      if (state.tradePollPending) return;
+      state.tradePollPending = true;
       try {
         var rows = await api("/fapi/v1/aggTrades?symbol=ETHUSDT&limit=500", 9000);
         rows.forEach(processTrade);
-      } catch (e) {}
+      } catch (e) {
+      } finally {
+        state.tradePollPending = false;
+      }
     }
     async function pollRestBook() {
       if (state.wsOpen) return;
@@ -1317,12 +1324,17 @@
       } catch (e) {}
     }
     async function pollRestKline() {
+      if (state.klinePollPending) return;
+      state.klinePollPending = true;
       try {
         var rows = await api("/fapi/v1/klines?symbol=ETHUSDT&interval=1m&limit=3", 9000);
         rows.forEach(function (r) {
           processKline({ k: { t: r[0], o: r[1], h: r[2], l: r[3], c: r[4], v: r[5], V: r[9], x: num(r[6]) < Date.now() } });
         });
-      } catch (e) {}
+      } catch (e) {
+      } finally {
+        state.klinePollPending = false;
+      }
     }
 
     function aggregateCandles(minutes) {
@@ -2634,6 +2646,15 @@
         renderStatusClock();
         drawChart();
       }, 250);
+      setInterval(function () {
+        var now = Date.now();
+        if (!state.lastTradeEventAt || now - state.lastTradeEventAt > 4500) {
+          pollRestTrades();
+        }
+        if (!state.lastKlineEventAt || now - state.lastKlineEventAt > 4500) {
+          pollRestKline();
+        }
+      }, 3000);
     }
 
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
