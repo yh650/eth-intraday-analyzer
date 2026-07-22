@@ -476,11 +476,12 @@
       padding: 0;
       box-shadow: 0 18px 70px rgba(0,0,0,.65);
     }
+    dialog[open] { display: flex; flex-direction: column; }
     dialog::backdrop { background: rgba(0,0,0,.72); backdrop-filter: blur(3px); }
     .dialog-head { display: flex; align-items: center; justify-content: space-between; padding: 13px 15px; border-bottom: 1px solid var(--line); }
     .dialog-head strong { font-size: 14px; }
     .icon-btn { width: 29px; height: 29px; border-radius: 4px; background: #1a1f2a; cursor: pointer; }
-    .settings-body { padding: 14px 15px; display: grid; gap: 13px; overflow-y: auto; }
+    .settings-body { min-height: 0; padding: 14px 15px; display: grid; gap: 13px; overflow-y: auto; }
     .field { display: grid; grid-template-columns: 1fr 160px; gap: 14px; align-items: center; }
     .field label { font-size: 12px; color: #d5dae4; }
     .field small { display: block; color: var(--muted); margin-top: 3px; font-size: 9px; }
@@ -685,7 +686,7 @@
           <span id="toolbarNote" class="toolbar-note">原始0.01 · 墙分析0.1 USDT分桶</span>
         </div>
         <div id="chartWrap" class="chart-wrap">
-          <canvas id="chartCanvas" role="img" aria-label="ETH USDT K线、成交量密集区域、CVD、爆仓点、大额成交和盘口墙"></canvas>
+          <canvas id="chartCanvas" role="img" aria-label="ETH USDT K线、成交量密集区域、CVD、爆仓点、近24小时主动流大单、实时大额成交和盘口墙"></canvas>
           <div class="legend" aria-hidden="true">
             <span class="legend-item legend-ema21">EMA21</span>
             <span class="legend-item legend-ema50">EMA50</span>
@@ -805,6 +806,18 @@
         <input id="costPctInput" type="number" min="0.02" max="0.30" step="0.01">
       </div>
       <div class="field">
+        <label>大买大卖标记<small>关闭后隐藏实时逐笔大单和历史主动流标记。</small></label>
+        <select id="largeTradesSelect"><option value="true">开启</option><option value="false">关闭</option></select>
+      </div>
+      <div class="field">
+        <label>近24小时历史大单<small>由币安K线主动买卖净额回补，不必从打开网页后才开始收集。</small></label>
+        <select id="historicalLargeTradesSelect"><option value="true">开启</option><option value="false">关闭</option></select>
+      </div>
+      <div class="field">
+        <label>大买大卖文字<small>默认关闭，只保留轻量标记；开启后显示金额文字。</small></label>
+        <select id="largeTradeLabelsSelect"><option value="false">关闭</option><option value="true">开启</option></select>
+      </div>
+      <div class="field">
         <label>自动滚动<small>保持K线始终跟随最新行情。</small></label>
         <select id="autoScrollSelect"><option value="true">开启</option><option value="false">关闭</option></select>
       </div>
@@ -851,7 +864,10 @@
       staleMs: 6500,
       priceStaleMs: 6500,
       cooldownMs: 45000,
-      roundTripCostPct: 0.08
+      roundTripCostPct: 0.08,
+      showLargeTrades: true,
+      showHistoricalLargeTrades: true,
+      showLargeTradeLabels: false
     };
 
     function loadConfig() {
@@ -2831,6 +2847,37 @@
       return nice * power;
     }
 
+    function historicalFlowEvents(candles, tf) {
+      if (!config.showLargeTrades || !config.showHistoricalLargeTrades || !candles.length) return [];
+      var tfMs = tf * 60000;
+      var latestTime = candles[candles.length - 1].t + tfMs;
+      var cutoff = latestTime - 86400000;
+      var candidates = [];
+      candles.forEach(function (c) {
+        if (c.t < cutoff || c.t >= latestTime || c.closed === false || !c.v || !c.c || !Number.isFinite(c.d)) return;
+        var dominance = Math.abs(c.d) / Math.max(c.v, .0001);
+        var flowNotional = Math.abs(c.d) * c.c;
+        if (dominance < .12 || !Number.isFinite(flowNotional) || flowNotional <= 0) return;
+        candidates.push({
+          t: c.t,
+          p: c.d >= 0 ? c.l : c.h,
+          notional: flowNotional,
+          side: c.d >= 0 ? "BUY" : "SELL",
+          dominance: dominance,
+          source: "KLINE"
+        });
+      });
+      candidates.sort(function (a, b) { return b.notional - a.notional; });
+      var maxEvents = tf <= 1 ? 24 : tf <= 3 ? 18 : tf <= 5 ? 14 : 10;
+      var timeGap = tfMs * (tf <= 1 ? 2 : 1);
+      var selected = [];
+      candidates.some(function (event) {
+        if (!selected.some(function (shown) { return Math.abs(event.t - shown.t) < timeGap; })) selected.push(event);
+        return selected.length >= maxEvents;
+      });
+      return selected.sort(function (a, b) { return a.t - b.t; });
+    }
+
     function drawChart() {
       var canvas = els.chartCanvas;
       var wrap = els.chartWrap;
@@ -2848,7 +2895,7 @@
       ctx.clearRect(0, 0, w, h);
       var candles = chartCandlesForTf(state.selectedTf);
       if (!candles.length) return;
-      els.toolbarNote.textContent = "历史 " + historyRangeLabel(state.selectedTf) + (state.historyLoading[state.selectedTf] ? " · 加载中" : "") + " · 墙分桶 " + config.bookBin + " USDT";
+      els.toolbarNote.textContent = "历史 " + historyRangeLabel(state.selectedTf) + (state.historyLoading[state.selectedTf] ? " · 加载中" : "") + (config.showLargeTrades && config.showHistoricalLargeTrades ? " · 大单24h" : "") + " · 墙分桶 " + config.bookBin + " USDT";
       var chart = state.chart;
       var rightPad = w < 520 ? 56 : 66;
       var leftPad = 8, topPad = 26, bottomPad = 22;
@@ -3087,11 +3134,64 @@
 
       var visibleStartTime = rows[0].t;
       var visibleEndTime = rows[rows.length - 1].t + markerTfMs;
+      var largeLabelBoxes = [];
+      function drawLargeTradeLabel(text, anchorX, anchorY, color) {
+        if (!config.showLargeTradeLabels || w < 700 || largeLabelBoxes.length >= 8) return;
+        ctx.font = "8px Cascadia Mono, Consolas, monospace";
+        var textWidth = ctx.measureText(text).width;
+        var labelX = anchorX + 7;
+        if (labelX + textWidth > w - rightPad - 3) labelX = anchorX - textWidth - 7;
+        var labelY = clamp(anchorY, topPad + 9, mainBottom - 3);
+        var box = { left: labelX - 2, right: labelX + textWidth + 2, top: labelY - 9, bottom: labelY + 3 };
+        var overlaps = largeLabelBoxes.some(function (shownBox) {
+          return !(box.right + 4 < shownBox.left || box.left - 4 > shownBox.right || box.bottom + 3 < shownBox.top || box.top - 3 > shownBox.bottom);
+        });
+        if (overlaps) return;
+        largeLabelBoxes.push(box);
+        ctx.globalAlpha = .58;
+        ctx.fillStyle = color;
+        ctx.fillText(text, labelX, labelY);
+        ctx.globalAlpha = 1;
+        ctx.font = "9px Cascadia Mono, Consolas, monospace";
+      }
+      var historicalMarkerLimit = w < 520 ? 6 : w < 900 ? 10 : 18;
+      var acceptedHistoricalMarkers = [];
+      historicalFlowEvents(candles, state.selectedTf).filter(function (event) {
+        return event.t >= visibleStartTime && event.t < visibleEndTime && event.p >= pMin && event.p <= pMax;
+      }).sort(function (a, b) { return b.notional - a.notional; }).some(function (event) {
+        var hx = markerX(event.t);
+        if (hx === null) return false;
+        var hy = priceToY(event.p);
+        var overlaps = acceptedHistoricalMarkers.some(function (shownEvent) {
+          return Math.hypot(hx - shownEvent.x, hy - shownEvent.y) < (w < 520 ? 18 : 11);
+        });
+        if (!overlaps) acceptedHistoricalMarkers.push({ event: event, x: hx, y: hy });
+        return acceptedHistoricalMarkers.length >= historicalMarkerLimit;
+      });
+      acceptedHistoricalMarkers.forEach(function (marker) {
+        var event = marker.event;
+        var hx = marker.x;
+        var hy = marker.y;
+        var buy = event.side === "BUY";
+        ctx.globalAlpha = .62;
+        ctx.strokeStyle = buy ? "rgba(0,245,160,.82)" : "rgba(255,65,108,.82)";
+        ctx.lineWidth = 1.1;
+        ctx.beginPath(); ctx.arc(hx, hy, 4.2, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath();
+        if (buy) { ctx.moveTo(hx, hy + 4); ctx.lineTo(hx, hy + 8); }
+        else { ctx.moveTo(hx, hy - 4); ctx.lineTo(hx, hy - 8); }
+        ctx.stroke();
+        drawLargeTradeLabel((buy ? "大买≈$" : "大卖≈$") + formatCompact(event.notional), hx, hy + (buy ? 4 : -3), buy ? "#82f7ca" : "#ff91a7");
+        ctx.globalAlpha = 1;
+      });
+      ctx.font = "9px Cascadia Mono, Consolas, monospace";
+      ctx.lineWidth = 1;
+
       var tradeMarkerLimit = w < 520 ? 7 : w < 900 ? 14 : 28;
       var tradeMarkerGap = w < 520 ? 15 : w < 900 ? 11 : 8;
       var tradeDisplayFloor = w < 520 ? 150000 : w < 900 ? 100000 : 75000;
       var acceptedTradeMarkers = [];
-      state.largeTrades.filter(function (trade) {
+      (config.showLargeTrades ? state.largeTrades : []).filter(function (trade) {
         return trade.t >= visibleStartTime && trade.t < visibleEndTime && trade.p >= pMin && trade.p <= pMax && trade.notional >= tradeDisplayFloor;
       }).sort(function (a, b) { return b.notional - a.notional; }).some(function (trade) {
         var tx = markerX(trade.t);
@@ -3112,9 +3212,8 @@
         ctx.fillStyle = buy ? "rgba(0,245,160,.48)" : "rgba(255,65,108,.48)";
         ctx.strokeStyle = buy ? "rgba(0,245,160,.9)" : "rgba(255,65,108,.9)";
         ctx.beginPath(); ctx.arc(tx, ty, radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-        if (w >= 700 && trade.notional >= 250000) {
-          ctx.fillStyle = buy ? "#82f7ca" : "#ff91a7";
-          ctx.fillText((buy ? "大买 $" : "大卖 $") + formatCompact(trade.notional), tx + radius + 3, ty - 3);
+        if (config.showLargeTradeLabels && w >= 700 && trade.notional >= 250000) {
+          drawLargeTradeLabel((buy ? "大买 $" : "大卖 $") + formatCompact(trade.notional), tx + radius, ty - 3, buy ? "#82f7ca" : "#ff91a7");
         }
       });
 
@@ -3365,6 +3464,9 @@
         els.megaWallInput.value = config.megaWallEth;
         els.signalThresholdInput.value = config.signalThreshold;
         els.costPctInput.value = config.roundTripCostPct;
+        els.largeTradesSelect.value = String(Boolean(config.showLargeTrades));
+        els.historicalLargeTradesSelect.value = String(Boolean(config.showHistoricalLargeTrades));
+        els.largeTradeLabelsSelect.value = String(Boolean(config.showLargeTradeLabels));
         els.autoScrollSelect.value = String(Boolean(config.autoScroll));
       }
       els.settingsBtn.addEventListener("click", function () { fill(); els.settingsDialog.showModal(); });
@@ -3380,6 +3482,9 @@
         config.megaWallEth = clamp(num(els.megaWallInput.value, 2000), 100, 20000);
         config.signalThreshold = clamp(num(els.signalThresholdInput.value, 72), 55, 90);
         config.roundTripCostPct = clamp(num(els.costPctInput.value, .08), .02, .30);
+        config.showLargeTrades = els.largeTradesSelect.value === "true";
+        config.showHistoricalLargeTrades = els.historicalLargeTradesSelect.value === "true";
+        config.showLargeTradeLabels = els.largeTradeLabelsSelect.value === "true";
         config.autoScroll = els.autoScrollSelect.value === "true";
         try {
           localStorage.setItem("ethAnalyzerConfig", JSON.stringify(config));
@@ -3428,7 +3533,7 @@
         "signalState","regimeChip","setupChip","confidenceText","rrText","levels","entryPrice","takeProfit",
         "invalidPrice","stopLoss","runnerPrice","signalAge","flowValue","flowMeta","bookImbalance","bookMeta","fundingSlope","crowdingMeta","conditionList","reasonBox",
         "statSamples","statWinRate","statExpectancy","signalLog","bookStatus","latencyText","clockText","settingsDialog","closeSettings","riskProfile",
-        "bookBinInput","wallFloorInput","megaWallInput","signalThresholdInput","costPctInput","autoScrollSelect","resetSettings","saveSettings"
+        "bookBinInput","wallFloorInput","megaWallInput","signalThresholdInput","costPctInput","largeTradesSelect","historicalLargeTradesSelect","largeTradeLabelsSelect","autoScrollSelect","resetSettings","saveSettings"
       ].forEach(function (id) { els[id] = $(id); });
     }
 
