@@ -245,6 +245,8 @@
     .legend-ema21 { color: #f2c14e; }
     .legend-ema50 { color: #a06cff; }
     .legend-vwap { color: #4c9dff; }
+    .legend-profile { color: #f5c451; }
+    .legend-events { color: #ff718d; }
     .chart-hint {
       position: absolute;
       right: 66px;
@@ -541,6 +543,7 @@
       .toolbar-countdown { font-size: 9px; }
       .chart-hint { display: none; }
       .legend { gap: 8px; font-size: 9px; }
+      .legend-profile, .legend-events { display: none; }
 
       .signal-panel {
         position: fixed;
@@ -567,6 +570,8 @@
         background: transparent;
         cursor: pointer;
       }
+      .mobile-handle:focus:not(:focus-visible) { outline: none; }
+      .mobile-handle:focus-visible { outline: 2px solid rgba(76,157,255,.72); outline-offset: -2px; }
       .mobile-handle::after { content: ""; width: 44px; height: 4px; border-radius: 4px; background: #3b4251; }
       .panel-head {
         height: 46px;
@@ -680,11 +685,13 @@
           <span id="toolbarNote" class="toolbar-note">原始0.01 · 墙分析0.1 USDT分桶</span>
         </div>
         <div id="chartWrap" class="chart-wrap">
-          <canvas id="chartCanvas" role="img" aria-label="ETH USDT K线、成交量、CVD、VWAP和盘口墙"></canvas>
+          <canvas id="chartCanvas" role="img" aria-label="ETH USDT K线、成交量密集区域、CVD、爆仓点、大额成交和盘口墙"></canvas>
           <div class="legend" aria-hidden="true">
             <span class="legend-item legend-ema21">EMA21</span>
             <span class="legend-item legend-ema50">EMA50</span>
             <span class="legend-item legend-vwap">VWAP</span>
+            <span class="legend-item legend-profile">成交密集</span>
+            <span class="legend-item legend-events">爆仓/大单</span>
           </div>
           <div id="chartLoading" class="chart-loading">正在加载币安历史K线与盘口…</div>
           <div id="chartWarning" class="chart-warning hidden">实时流不可达，正在使用REST降级模式</div>
@@ -825,6 +832,12 @@
       "ethusdt@kline_1m",
       "ethusdt@forceOrder"
     ];
+    var TF_HISTORY = {
+      1: { interval: "1m", defaultCount: 4320, hardCount: 10080 },
+      3: { interval: "3m", defaultCount: 3360, hardCount: 10080 },
+      5: { interval: "5m", defaultCount: 4320, hardCount: 12960 },
+      15: { interval: "15m", defaultCount: 2880, hardCount: 8640 }
+    };
 
     var DEFAULT_CONFIG = {
       bookBin: 0.1,
@@ -876,9 +889,13 @@
       cvd: 0,
       tradeSeconds: new Map(),
       rawTrades: [],
+      largeTrades: [],
       lastAggId: -1,
       markSamples: [],
       liquidations: [],
+      historyByTf: { 3: [], 5: [], 15: [] },
+      historyLoading: { 1: false, 3: false, 5: false, 15: false },
+      historyComplete: { 1: false, 3: false, 5: false, 15: false },
       derivatives: {
         openInterest: 0,
         oiChangePct: 0,
@@ -902,6 +919,7 @@
       },
       wallHistory: [],
       wallTracks: new Map(),
+      displayWallPrices: { BID: [], ASK: [] },
       currentBookMetrics: null,
       currentMetrics: null,
       regime: {
@@ -1064,22 +1082,101 @@
       els.chartWarning.classList.toggle("hidden", mode !== "REST");
     }
 
+    function parseKlineRow(r) {
+      var volume = num(r[5]);
+      var takerBuy = num(r[9]);
+      return {
+        t: num(r[0]), o: num(r[1]), h: num(r[2]), l: num(r[3]), c: num(r[4]),
+        v: volume, d: takerBuy * 2 - volume, closed: num(r[6]) < Date.now()
+      };
+    }
+
+    function mergeCandleRows(existing, incoming, maxCount) {
+      var map = new Map();
+      existing.forEach(function (c) { map.set(c.t, c); });
+      incoming.forEach(function (c) { map.set(c.t, c); });
+      var rows = Array.from(map.values()).sort(function (a, b) { return a.t - b.t; });
+      if (rows.length > maxCount) rows = rows.slice(rows.length - maxCount);
+      return rows;
+    }
+
+    function chartCandlesForTf(tf) {
+      if (tf === 1) return state.candles1m.slice();
+      var stored = state.historyByTf[tf] || [];
+      var live = aggregateCandles(tf).slice(-3);
+      if (!stored.length) return aggregateCandles(tf);
+      var out = stored.slice();
+      live.forEach(function (c) {
+        var found = -1;
+        for (var i = out.length - 1; i >= Math.max(0, out.length - 6); i--) {
+          if (out[i].t === c.t) { found = i; break; }
+        }
+        if (found >= 0) out[found] = c;
+        else if (!out.length || c.t > out[out.length - 1].t) out.push(c);
+      });
+      return out;
+    }
+
+    async function extendHistory(tf, targetCount, quiet) {
+      var meta = TF_HISTORY[tf];
+      if (!meta || state.historyLoading[tf] || state.historyComplete[tf]) return;
+      if (tf !== 1 && !(state.historyByTf[tf] || []).length) state.historyByTf[tf] = aggregateCandles(tf);
+      state.historyLoading[tf] = true;
+      var preserveView = state.selectedTf === tf && state.chart.offset > 1;
+      var beforeLength = chartCandlesForTf(tf).length;
+      try {
+        while (chartCandlesForTf(tf).length < Math.min(targetCount, meta.hardCount)) {
+          var current = chartCandlesForTf(tf);
+          var endTime = current.length ? current[0].t - 1 : Date.now();
+          var need = Math.min(1500, Math.min(targetCount, meta.hardCount) - current.length);
+          var rows = await api("/fapi/v1/klines?symbol=ETHUSDT&interval=" + meta.interval + "&limit=" + need + "&endTime=" + endTime, 15000);
+          var parsed = rows.map(parseKlineRow);
+          if (tf === 1) state.candles1m = mergeCandleRows(state.candles1m, parsed, meta.hardCount);
+          else state.historyByTf[tf] = mergeCandleRows(state.historyByTf[tf] || [], parsed, meta.hardCount);
+          if (rows.length < need || !parsed.length) {
+            state.historyComplete[tf] = true;
+            break;
+          }
+        }
+        var afterLength = chartCandlesForTf(tf).length;
+        if (preserveView && afterLength > beforeLength) state.chart.offset += afterLength - beforeLength;
+        if (!quiet && afterLength > beforeLength) showToast("已加载更早K线 · 当前 " + historyRangeLabel(tf));
+      } catch (e) {
+        if (!quiet) showToast("历史K线加载暂时失败", "warn");
+      } finally {
+        state.historyLoading[tf] = false;
+        drawChart();
+      }
+    }
+
+    function historyRangeLabel(tf) {
+      var rows = chartCandlesForTf(tf);
+      if (rows.length < 2) return "--";
+      var hours = (rows[rows.length - 1].t - rows[0].t) / 3600000;
+      return hours < 48 ? Math.max(1, Math.round(hours)) + "小时" : (hours / 24).toFixed(hours < 240 ? 1 : 0) + "天";
+    }
+
+    function maybeLoadOlderHistory() {
+      var tf = state.selectedTf;
+      var meta = TF_HISTORY[tf];
+      var rows = chartCandlesForTf(tf);
+      if (!meta || !rows.length || state.historyLoading[tf] || state.historyComplete[tf] || rows.length >= meta.hardCount) return;
+      var maxOffset = Math.max(0, rows.length - 20);
+      if (state.chart.offset >= maxOffset - state.chart.visibleCount * 1.25) {
+        extendHistory(tf, Math.min(meta.hardCount, rows.length + 1500), false);
+      }
+    }
+
     async function loadInitialKlines() {
       try {
         var rows = await api("/fapi/v1/klines?symbol=ETHUSDT&interval=1m&limit=1500", 15000);
-        state.candles1m = rows.map(function (r) {
-          var volume = num(r[5]);
-          var takerBuy = num(r[9]);
-          return {
-            t: num(r[0]), o: num(r[1]), h: num(r[2]), l: num(r[3]), c: num(r[4]),
-            v: volume, d: takerBuy * 2 - volume, closed: num(r[6]) < Date.now()
-          };
-        });
+        state.candles1m = rows.map(parseKlineRow);
         state.lastPrice = state.candles1m.length ? state.candles1m[state.candles1m.length - 1].c : 0;
         state.cvd = sum(state.candles1m.slice(-240).map(function (c) { return c.d; }));
         els.chartLoading.classList.add("hidden");
         addLog("info", "<b>历史K线已加载</b>，开始计算5m/15m市场状态。");
         drawChart();
+        extendHistory(1, TF_HISTORY[1].defaultCount, true);
       } catch (e) {
         els.chartLoading.textContent = "历史K线加载失败：" + e.message;
         addLog("warn", "<b>历史K线加载失败</b>，等待网络恢复。");
@@ -1205,7 +1302,7 @@
       if (bucket > last.t) {
         last.closed = true;
         list.push({ t: bucket, o: last.c, h: price, l: price, c: price, v: 0, d: 0, closed: false });
-        if (list.length > 1600) list.splice(0, list.length - 1600);
+        if (list.length > TF_HISTORY[1].hardCount) list.splice(0, list.length - TF_HISTORY[1].hardCount);
       } else if (bucket === last.t) {
         last.h = Math.max(last.h, price);
         last.l = Math.min(last.l, price);
@@ -1224,6 +1321,11 @@
       updateCurrentCandleFromPrice(price, eventTime || receivedAt);
     }
 
+    function largeTradeThreshold() {
+      var notionals = state.rawTrades.slice(-800).map(function (t) { return t.notional || t.p * t.q; }).filter(function (v) { return v > 0; });
+      return Math.max(75000, percentile(notionals, .992) * 1.45);
+    }
+
     function processTrade(d) {
       var id = num(d.a, -1);
       if (id >= 0 && id <= state.lastAggId) return;
@@ -1233,6 +1335,8 @@
       var time = num(d.T || d.E || Date.now());
       var sellTaker = Boolean(d.m);
       if (!price || !qty) return;
+      var notional = price * qty;
+      var blockThreshold = largeTradeThreshold();
       updateLivePrice(price, time, "TRADE");
       var delta = sellTaker ? -qty : qty;
       state.cvd += delta;
@@ -1244,7 +1348,14 @@
       row.notional += qty * price;
       row.price = price;
       state.tradeSeconds.set(sec, row);
-      state.rawTrades.push({ t: time, p: price, q: qty, side: sellTaker ? "SELL" : "BUY" });
+      var trade = { t: time, p: price, q: qty, notional: notional, side: sellTaker ? "SELL" : "BUY" };
+      state.rawTrades.push(trade);
+      if (notional >= blockThreshold) {
+        state.largeTrades.push(trade);
+        if (notional >= Math.max(250000, blockThreshold * 1.8)) {
+          addLogOnce("block-" + id, sellTaker ? "sell" : "buy", "<b>大额主动" + (sellTaker ? "卖出" : "买入") + "</b> · $" + formatCompact(notional) + " · " + formatPrice(price), 5000);
+        }
+      }
       state.priceHistory.push({ t: time, p: price });
       pruneRealtimeBuffers(time);
     }
@@ -1258,7 +1369,8 @@
         if (k < now - 600000) state.tradeSeconds.delete(k);
       });
       state.markSamples = state.markSamples.filter(function (x) { return x.t >= now - 300000; });
-      state.liquidations = state.liquidations.filter(function (x) { return x.t >= now - 300000; });
+      state.largeTrades = state.largeTrades.filter(function (x) { return x.t >= now - 1800000; }).slice(-300);
+      state.liquidations = state.liquidations.filter(function (x) { return x.t >= now - 1800000; }).slice(-200);
     }
 
     function processMark(d) {
@@ -1311,7 +1423,7 @@
         list[existingIndex] = candle;
       } else if (!last || candle.t > last.t) {
         list.push(candle);
-        if (list.length > 1600) list.splice(0, list.length - 1600);
+        if (list.length > TF_HISTORY[1].hardCount) list.splice(0, list.length - TF_HISTORY[1].hardCount);
       }
       updateLivePrice(candle.c, num(d.E || k.T || Date.now()), "KLINE");
     }
@@ -1321,11 +1433,18 @@
       var price = num(o.ap || o.p);
       var qty = num(o.q);
       if (!price || !qty) return;
-      state.liquidations.push({
+      var liquidation = {
         t: num(o.T || d.E || Date.now()),
         side: String(o.S || ""),
+        price: price,
+        qty: qty,
         notional: price * qty
-      });
+      };
+      state.liquidations.push(liquidation);
+      if (liquidation.notional >= 100000) {
+        var longLiquidation = liquidation.side === "SELL";
+        addLog(longLiquidation ? "sell" : "buy", "<b>" + (longLiquidation ? "多头爆仓" : "空头爆仓") + "</b> · $" + formatCompact(liquidation.notional) + " · " + formatPrice(price));
+      }
     }
 
     function connectWebSocket() {
@@ -1859,16 +1978,40 @@
       return result;
     }
 
+    function stabilizeWallDisplay(book, side) {
+      var rows = side === "BID" ? book.bidRows : book.askRows;
+      var candidates = side === "BID" ? book.bidWalls : book.askWalls;
+      var previous = state.displayWallPrices[side] || [];
+      var selected = [];
+      previous.forEach(function (price) {
+        var row = rows.find(function (x) { return Math.abs(x.price - price) < config.bookBin * .2; });
+        if (row && row.quality >= .30 && row.effectiveQty >= book.threshold * .42 && row.distancePct <= config.maxBookDistancePct) selected.push(row);
+      });
+      candidates.slice().sort(function (a, b) {
+        var scoreA = a.effectiveQty * (.65 + a.quality) / (1 + a.distancePct * 5);
+        var scoreB = b.effectiveQty * (.65 + b.quality) / (1 + b.distancePct * 5);
+        return scoreB - scoreA;
+      }).some(function (row) {
+        if (!selected.some(function (x) { return Math.abs(x.price - row.price) < config.bookBin * .2; })) selected.push(row);
+        return selected.length >= 3;
+      });
+      selected = selected.slice(0, 3).sort(function (a, b) { return a.distancePct - b.distancePct; });
+      state.displayWallPrices[side] = selected.map(function (x) { return x.price; });
+      return selected;
+    }
+
     function captureWallSnapshot(now) {
       if (now - state.lastWallSnapshotAt < 950) return;
       state.lastWallSnapshotAt = now;
       var book = aggregateBook();
       if (!book) return;
-      state.currentBookMetrics = book;
       state.wallHistory.push(book);
       state.wallHistory = state.wallHistory.filter(function (x) { return x.t >= now - 13000; });
       var old = state.wallHistory.find(function (x) { return x.t <= now - 9000; }) || state.wallHistory[0];
       book.changes = compareWalls(book, old);
+      book.displayBidWalls = stabilizeWallDisplay(book, "BID");
+      book.displayAskWalls = stabilizeWallDisplay(book, "ASK");
+      state.currentBookMetrics = book;
     }
 
     function computeCrowding(now, move15, premiumSlope) {
@@ -2703,8 +2846,9 @@
       var ctx = canvas.getContext("2d");
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      var candles = aggregateCandles(state.selectedTf);
+      var candles = chartCandlesForTf(state.selectedTf);
       if (!candles.length) return;
+      els.toolbarNote.textContent = "历史 " + historyRangeLabel(state.selectedTf) + (state.historyLoading[state.selectedTf] ? " · 加载中" : "") + " · 墙分桶 " + config.bookBin + " USDT";
       var chart = state.chart;
       var rightPad = w < 520 ? 56 : 66;
       var leftPad = 8, topPad = 26, bottomPad = 22;
@@ -2767,6 +2911,47 @@
       ctx.fillStyle = "rgba(111,120,138,.72)";
       ctx.fillText("未来", Math.min(futureStartX + 6, w - rightPad - 28), topPad + 12);
 
+      var profileBinCount = clamp(Math.round((mainBottom - topPad) / 13), 18, 46);
+      var profileStep = (pMax - pMin) / profileBinCount;
+      var visibleProfile = new Array(profileBinCount).fill(0);
+      rows.forEach(function (c) {
+        var lo = clamp(Math.floor((c.l - pMin) / profileStep), 0, profileBinCount - 1);
+        var hi = clamp(Math.floor((c.h - pMin) / profileStep), 0, profileBinCount - 1);
+        var share = c.v / Math.max(1, hi - lo + 1);
+        for (var bi = lo; bi <= hi; bi++) visibleProfile[bi] += share;
+      });
+      var profileMax = Math.max.apply(null, visibleProfile) || 1;
+      var profileRight = Math.min(futureStartX, w - rightPad);
+      var profileMaxW = Math.min(plotW * .17, w < 520 ? 58 : 150);
+      visibleProfile.forEach(function (volume, i) {
+        if (volume < profileMax * .08) return;
+        var binLow = pMin + i * profileStep;
+        var binHigh = binLow + profileStep;
+        var yTop = priceToY(binHigh);
+        var yBottom = priceToY(binLow);
+        var barW = volume / profileMax * profileMaxW;
+        ctx.fillStyle = "rgba(76,157,255,.075)";
+        ctx.fillRect(profileRight - barW, yTop, barW, Math.max(1, yBottom - yTop));
+      });
+      var denseBins = visibleProfile.map(function (volume, i) { return { i: i, volume: volume }; }).sort(function (a, b) { return b.volume - a.volume; });
+      var selectedDense = [];
+      denseBins.some(function (bin) {
+        if (!selectedDense.some(function (x) { return Math.abs(x.i - bin.i) <= 1; })) selectedDense.push(bin);
+        return selectedDense.length >= 3;
+      });
+      selectedDense.forEach(function (bin, rank) {
+        var binLow = pMin + bin.i * profileStep;
+        var binHigh = binLow + profileStep;
+        var yTop = priceToY(binHigh);
+        var yBottom = priceToY(binLow);
+        ctx.fillStyle = rank === 0 ? "rgba(245,196,81,.055)" : "rgba(76,157,255,.025)";
+        ctx.fillRect(leftPad, yTop, Math.max(0, profileRight - leftPad), Math.max(1, yBottom - yTop));
+        if (rank === 0 && w >= 700) {
+          ctx.fillStyle = "rgba(245,210,122,.72)";
+          ctx.fillText("成交密集 " + formatPrice((binLow + binHigh) / 2), leftPad + 5, yTop + 10);
+        }
+      });
+
       var maxVol = Math.max.apply(null, rows.map(function (c) { return c.v; })) || 1;
       var cvd = 0;
       var cvdVals = rows.map(function (c) { cvd += c.d || 0; return cvd; });
@@ -2828,7 +3013,9 @@
       ctx.fillText("CVD", leftPad + 3, cvdTop - 4);
 
       if (state.currentBookMetrics) {
-        var walls = state.currentBookMetrics.bidWalls.slice(0, 3).concat(state.currentBookMetrics.askWalls.slice(0, 3));
+        var displayBids = state.currentBookMetrics.displayBidWalls || state.currentBookMetrics.bidWalls.slice(0, 3);
+        var displayAsks = state.currentBookMetrics.displayAskWalls || state.currentBookMetrics.askWalls.slice(0, 3);
+        var walls = displayBids.concat(displayAsks);
         walls.forEach(function (wall) {
           if (wall.price < pMin || wall.price > pMax) return;
           var y = priceToY(wall.price);
@@ -2838,7 +3025,7 @@
           ctx.beginPath(); ctx.moveTo(w - rightPad - Math.min(plotW * .32, 220), y); ctx.lineTo(w - rightPad, y); ctx.stroke();
           ctx.setLineDash([]);
           ctx.fillStyle = bid ? "#00d88e" : "#f75b78";
-          ctx.fillText((bid ? "买墙 " : "卖墙 ") + formatQty(wall.effectiveQty || wall.qty) + " Q" + Math.round((wall.quality || 0) * 100), w - rightPad - Math.min(plotW * .31, 212), y - 3);
+          ctx.fillText((bid ? "买墙 " : "卖墙 ") + formatQty(wall.effectiveQty || wall.qty) + " Q" + Math.round((wall.quality || 0) * 100) + " " + Math.round(wall.ageSec || 0) + "s", w - rightPad - Math.min(plotW * .31, 230), y - 3);
         });
       }
 
@@ -2897,6 +3084,70 @@
       }
       state.signalRecords.slice(0, 40).forEach(function (record) { drawSignalMarker(record, false); });
       if (state.signal) drawSignalMarker(state.signal, true);
+
+      var visibleStartTime = rows[0].t;
+      var visibleEndTime = rows[rows.length - 1].t + markerTfMs;
+      var tradeMarkerLimit = w < 520 ? 7 : w < 900 ? 14 : 28;
+      var tradeMarkerGap = w < 520 ? 15 : w < 900 ? 11 : 8;
+      var tradeDisplayFloor = w < 520 ? 150000 : w < 900 ? 100000 : 75000;
+      var acceptedTradeMarkers = [];
+      state.largeTrades.filter(function (trade) {
+        return trade.t >= visibleStartTime && trade.t < visibleEndTime && trade.p >= pMin && trade.p <= pMax && trade.notional >= tradeDisplayFloor;
+      }).sort(function (a, b) { return b.notional - a.notional; }).some(function (trade) {
+        var tx = markerX(trade.t);
+        if (tx === null) return false;
+        var ty = priceToY(trade.p);
+        var overlaps = acceptedTradeMarkers.some(function (shownTrade) {
+          return Math.hypot(tx - shownTrade.x, ty - shownTrade.y) < tradeMarkerGap;
+        });
+        if (!overlaps) acceptedTradeMarkers.push({ trade: trade, x: tx, y: ty });
+        return acceptedTradeMarkers.length >= tradeMarkerLimit;
+      });
+      acceptedTradeMarkers.forEach(function (marker) {
+        var trade = marker.trade;
+        var tx = marker.x;
+        var ty = marker.y;
+        var buy = trade.side === "BUY";
+        var radius = clamp(2.2 + Math.log10(Math.max(1, trade.notional / 50000)) * 1.8, 2.2, 6.5);
+        ctx.fillStyle = buy ? "rgba(0,245,160,.48)" : "rgba(255,65,108,.48)";
+        ctx.strokeStyle = buy ? "rgba(0,245,160,.9)" : "rgba(255,65,108,.9)";
+        ctx.beginPath(); ctx.arc(tx, ty, radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        if (w >= 700 && trade.notional >= 250000) {
+          ctx.fillStyle = buy ? "#82f7ca" : "#ff91a7";
+          ctx.fillText((buy ? "大买 $" : "大卖 $") + formatCompact(trade.notional), tx + radius + 3, ty - 3);
+        }
+      });
+
+      var liquidationLimit = w < 520 ? 8 : 24;
+      var acceptedLiquidations = [];
+      state.liquidations.filter(function (liq) {
+        return liq.t >= visibleStartTime && liq.t < visibleEndTime && liq.price >= pMin && liq.price <= pMax;
+      }).sort(function (a, b) { return b.notional - a.notional; }).some(function (liq) {
+        var lx = markerX(liq.t);
+        if (lx === null) return false;
+        var ly = priceToY(liq.price);
+        var overlaps = acceptedLiquidations.some(function (shownLiq) {
+          return Math.hypot(lx - shownLiq.x, ly - shownLiq.y) < (w < 520 ? 14 : 8);
+        });
+        if (!overlaps) acceptedLiquidations.push({ liq: liq, x: lx, y: ly });
+        return acceptedLiquidations.length >= liquidationLimit;
+      });
+      acceptedLiquidations.forEach(function (marker) {
+        var liq = marker.liq;
+        var lx = marker.x;
+        var ly = marker.y;
+        var longLiq = liq.side === "SELL";
+        var size = clamp(4 + Math.log10(Math.max(1, liq.notional / 50000)) * 2, 4, 9);
+        ctx.fillStyle = longLiq ? "rgba(255,65,108,.78)" : "rgba(0,245,160,.72)";
+        ctx.strokeStyle = "rgba(235,240,248,.88)";
+        ctx.beginPath();
+        ctx.moveTo(lx, ly - size); ctx.lineTo(lx + size, ly); ctx.lineTo(lx, ly + size); ctx.lineTo(lx - size, ly); ctx.closePath();
+        ctx.fill(); ctx.stroke();
+        if (w >= 560 || liq.notional >= 250000) {
+          ctx.fillStyle = longLiq ? "#ff91a7" : "#82f7ca";
+          ctx.fillText((longLiq ? "多爆 $" : "空爆 $") + formatCompact(liq.notional), lx + size + 3, ly + 3);
+        }
+      });
 
       var livePrice = state.lastPrice || rows[rows.length - 1].c;
       if (livePrice >= pMin && livePrice <= pMax) {
@@ -3001,8 +3252,9 @@
         } else if (state.chart.dragging) {
           var rightPad = rect.width < 520 ? 56 : 66;
           var step = Math.max(3, (rect.width - rightPad - 8) / state.chart.visibleCount);
-          state.chart.offset = clamp(state.chart.dragOffset + (e.clientX - state.chart.dragStartX) / step, 0, Math.max(0, aggregateCandles(state.selectedTf).length - 20));
+          state.chart.offset = clamp(state.chart.dragOffset + (e.clientX - state.chart.dragStartX) / step, 0, Math.max(0, chartCandlesForTf(state.selectedTf).length - 20));
           if (state.chart.offset > 1) config.autoScroll = false;
+          maybeLoadOlderHistory();
         } else {
           wrap.style.cursor = isPriceAxis(e.clientX) ? "ns-resize" : "crosshair";
         }
@@ -3135,6 +3387,8 @@
           addLog("warn", "<b>本地参数无法持久保存</b>，本次打开仍然有效。");
         }
         state.wallHistory.length = 0;
+        state.wallTracks.clear();
+        state.displayWallPrices = { BID: [], ASK: [] };
         els.settingsDialog.close();
         showToast("策略参数已保存并应用");
       });
@@ -3149,6 +3403,7 @@
           els.periodTag.textContent = state.selectedTf + "分钟";
           state.chart.offset = 0;
           drawChart();
+          extendHistory(state.selectedTf, TF_HISTORY[state.selectedTf].defaultCount, true);
         });
       });
       els.alertBtn.addEventListener("click", enableAlerts);
