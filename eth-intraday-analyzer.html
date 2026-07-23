@@ -392,7 +392,7 @@
 
     .review-strip {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 1px;
       background: var(--line-soft);
       border-bottom: 1px solid var(--line);
@@ -692,7 +692,7 @@
             <span class="legend-item legend-ema50">EMA50</span>
             <span class="legend-item legend-vwap">VWAP</span>
             <span class="legend-item legend-profile">成交密集</span>
-            <span class="legend-item legend-events">爆仓/大单</span>
+            <span class="legend-item legend-events">○历史流&nbsp; ●实时单&nbsp; ◆爆仓</span>
           </div>
           <div id="chartLoading" class="chart-loading">正在加载币安历史K线与盘口…</div>
           <div id="chartWarning" class="chart-warning hidden">实时流不可达，正在使用REST降级模式</div>
@@ -729,7 +729,7 @@
           <div id="levels" class="levels">
             <div class="level"><label>入场价</label><strong id="entryPrice">等待信号</strong></div>
             <div class="level tp"><label>主止盈 TP1</label><strong id="takeProfit">等待信号</strong></div>
-            <div class="level invalid"><label>失效价</label><strong id="invalidPrice">等待信号</strong></div>
+            <div class="level invalid"><label>结构警戒</label><strong id="invalidPrice">等待信号</strong></div>
             <div class="level stop"><label>硬止损 SL</label><strong id="stopLoss">等待信号</strong></div>
             <div class="level runner"><label>延伸目标</label><strong id="runnerPrice">等待信号</strong></div>
             <div class="level"><label>信号年龄</label><strong id="signalAge">--</strong></div>
@@ -749,10 +749,11 @@
           <span class="condition-item warn">拥挤度收集中</span>
         </div>
 
-        <div class="review-strip" aria-label="历史信号表现">
-          <div class="review-cell"><span>复盘样本</span><b id="statSamples" class="mono">0</b></div>
-          <div class="review-cell"><span>历史胜率</span><b id="statWinRate" class="mono">--</b></div>
-          <div class="review-cell"><span>平均期望</span><b id="statExpectancy" class="mono">--</b></div>
+        <div class="review-strip" aria-label="滚动48小时信号表现">
+          <div class="review-cell"><span>48h样本</span><b id="statSamples" class="mono">0</b></div>
+          <div class="review-cell"><span>48h胜率</span><b id="statWinRate" class="mono">--</b></div>
+          <div class="review-cell"><span>24h胜率</span><b id="statWinRate24" class="mono">--</b></div>
+          <div class="review-cell"><span>48h期望</span><b id="statExpectancy" class="mono">--</b></div>
         </div>
 
         <div id="reasonBox" class="reason-box"><b>判断：</b>正在收集1分钟K线、逐笔成交和本地深度盘口。</div>
@@ -846,10 +847,10 @@
       "ethusdt@forceOrder"
     ];
     var TF_HISTORY = {
-      1: { interval: "1m", defaultCount: 4320, hardCount: 10080 },
-      3: { interval: "3m", defaultCount: 3360, hardCount: 10080 },
-      5: { interval: "5m", defaultCount: 4320, hardCount: 12960 },
-      15: { interval: "15m", defaultCount: 2880, hardCount: 8640 }
+      1: { interval: "1m", defaultCount: 2880, hardCount: 10080 },
+      3: { interval: "3m", defaultCount: 960, hardCount: 10080 },
+      5: { interval: "5m", defaultCount: 576, hardCount: 12960 },
+      15: { interval: "15m", defaultCount: 192, hardCount: 8640 }
     };
 
     var DEFAULT_CONFIG = {
@@ -881,7 +882,7 @@
 
     function loadSignalRecords() {
       try {
-        var rows = JSON.parse(localStorage.getItem("ethAnalyzerSignalRecordsV2") || "[]");
+        var rows = JSON.parse(localStorage.getItem("ethAnalyzerSignalRecordsV3ShortTerm") || "[]");
         return Array.isArray(rows) ? rows.slice(0, 200) : [];
       } catch (e) {
         return [];
@@ -1385,8 +1386,8 @@
         if (k < now - 600000) state.tradeSeconds.delete(k);
       });
       state.markSamples = state.markSamples.filter(function (x) { return x.t >= now - 300000; });
-      state.largeTrades = state.largeTrades.filter(function (x) { return x.t >= now - 1800000; }).slice(-300);
-      state.liquidations = state.liquidations.filter(function (x) { return x.t >= now - 1800000; }).slice(-200);
+      state.largeTrades = state.largeTrades.filter(function (x) { return x.t >= now - 172800000; }).slice(-4000);
+      state.liquidations = state.liquidations.filter(function (x) { return x.t >= now - 172800000; }).slice(-1500);
     }
 
     function processMark(d) {
@@ -1411,12 +1412,16 @@
       var bid = num(d.b);
       var ask = num(d.a);
       var price = bid && ask ? (bid + ask) / 2 : bid || ask;
-      updateLivePrice(price, num(d.E || Date.now()), "BOOK");
+      if (!state.lastTradeEventAt || Date.now() - state.lastTradeEventAt > 1500) {
+        updateLivePrice(price, num(d.E || Date.now()), "BOOK");
+      }
     }
 
     function processTicker(d) {
       state.dayChangePct = Number.isFinite(Number(d.P)) ? Number(d.P) : state.dayChangePct;
-      updateLivePrice(num(d.c), num(d.E || Date.now()), "TICKER");
+      if (!state.lastTradeEventAt || Date.now() - state.lastTradeEventAt > 1500) {
+        updateLivePrice(num(d.c), num(d.E || Date.now()), "TICKER");
+      }
     }
 
     function processKline(d) {
@@ -2318,8 +2323,12 @@
       };
     }
 
-    function performanceStats(records) {
-      var rows = (records || state.signalRecords).filter(function (x) { return Number.isFinite(x.resultR); });
+    function performanceStats(records, windowMs, now) {
+      var cutoff = windowMs ? (now || Date.now()) - windowMs : 0;
+      var rows = (records || state.signalRecords).filter(function (x) {
+        var timestamp = x.exitAt || x.createdAt || 0;
+        return Number.isFinite(x.resultR) && (!cutoff || timestamp >= cutoff);
+      });
       var wins = rows.filter(function (x) { return x.resultR > .05; }).length;
       var avgR = rows.length ? mean(rows.map(function (x) { return x.resultR; })) : 0;
       var lossStreak = 0, maxLossStreak = 0;
@@ -2340,7 +2349,7 @@
 
     function calibratedConfidence(rawScore, setup, regime) {
       var comparable = state.signalRecords.filter(function (x) {
-        return x.setup === setup && x.regime === regime && Number.isFinite(x.resultR);
+        return x.setup === setup && x.regime === regime && Number.isFinite(x.resultR) && (x.exitAt || x.createdAt || 0) >= Date.now() - 172800000;
       }).slice(0, 60);
       if (comparable.length < 8) return rawScore;
       var stats = performanceStats(comparable);
@@ -2351,16 +2360,16 @@
 
     function saveSignalRecords() {
       try {
-        localStorage.setItem("ethAnalyzerSignalRecordsV2", JSON.stringify(state.signalRecords.slice(0, 200)));
+        localStorage.setItem("ethAnalyzerSignalRecordsV3ShortTerm", JSON.stringify(state.signalRecords.slice(0, 200)));
       } catch (e) {}
     }
 
     function signalMaxAge(setup) {
-      if (setup === "range_reversal") return 8 * 60000;
-      if (setup === "fake_breakout") return 10 * 60000;
-      if (setup === "accepted_breakout") return 14 * 60000;
-      if (setup === "trend_pullback") return 20 * 60000;
-      return 10 * 60000;
+      if (setup === "range_reversal") return 25 * 60000;
+      if (setup === "fake_breakout") return 35 * 60000;
+      if (setup === "accepted_breakout") return 50 * 60000;
+      if (setup === "trend_pullback") return 75 * 60000;
+      return 35 * 60000;
     }
 
     function riskMinimum(setup, regime, confidence) {
@@ -2404,7 +2413,7 @@
       }
       riskPct = risk / entry * 100;
       if (riskPct > maxRiskPct || risk <= 0) return null;
-      var invalid = isLong ? entry - risk * .68 : entry + risk * .68;
+      var invalid = isLong ? entry - risk * .85 : entry + risk * .85;
       var minRR = riskMinimum(setup, regime, confidence);
       var roundTripCost = entry * config.roundTripCostPct / 100;
       var riskUnit = risk + roundTripCost;
@@ -2467,6 +2476,7 @@
         regime: regime,
         supportWallPrice: supportWall ? supportWall.price : 0,
         supportWallQty: supportWall ? supportWall.qty : 0,
+        exitPressure: 0,
         crisis: false
       };
     }
@@ -2611,11 +2621,18 @@
       var crisisFlow = isLong ?
         (flow.z <= -2.6 && flow.ratio10 <= -.22) :
         (flow.z >= 2.6 && flow.ratio10 >= .22);
+      var severeCrisisFlow = isLong ?
+        (flow.z <= -3.4 && flow.ratio10 <= -.34) :
+        (flow.z >= 3.4 && flow.ratio10 >= .34);
       var broadCancel = isLong ? changes.bidCancelMax > .70 : changes.askCancelMax > .70;
       var hardHit = isLong ? price <= s.stop : price >= s.stop;
       var invalidHit = isLong ? price <= s.invalid : price >= s.invalid;
       var targetHit = isLong ? price >= s.target : price <= s.target;
       var runnerHit = s.tp1Hit && (isLong ? price >= s.runner : price <= s.runner);
+      var age = now - s.createdAt;
+      var progressR = favorable / Math.max(s.riskUnit, .0001);
+      var adverseR = adverse / Math.max(s.riskUnit, .0001);
+      var flowAgainst = isLong ? flow.ratio10 < -.12 : flow.ratio10 > .12;
 
       if (runnerHit) {
         finalizeSignal(s, "延伸目标达成", s.runner, "TP");
@@ -2633,27 +2650,44 @@
         return;
       }
 
-      if (!s.protected && favorable / Math.max(s.riskUnit, .0001) >= .90) {
+      if (!s.protected && progressR >= 1.15) {
         s.protected = true;
-        s.stop = isLong ? s.entry + s.roundTripCost * .25 : s.entry - s.roundTripCost * .25;
-        addLog("info", "<b>风险已收紧</b> · 浮盈接近1R，止损移动至成本附近。");
+        s.stop = isLong ? s.entry + s.roundTripCost : s.entry - s.roundTripCost;
+        addLog("info", "<b>风险已收紧</b> · 浮盈超过1R，硬止损移动至交易成本之外。");
         hardHit = isLong ? price <= s.stop : price >= s.stop;
       }
 
-      if (hardHit || invalidHit || wallWithdrawn || broadCancel || crisisFlow) {
-        var reason = hardHit ? "硬止损触发" :
-          invalidHit ? "结构失效价触发" :
-          wallWithdrawn || broadCancel ? (isLong ? "多头买墙大面积撤单" : "空头卖墙大面积撤单") :
-          (isLong ? "巨额主动砸盘反转" : "巨额主动买盘反转");
+      if (hardHit) {
+        triggerCrisisExit(s, "硬止损触发");
+        return;
+      }
+
+      var wallIssue = wallWithdrawn || broadCancel;
+      var evidenceCount = (invalidHit ? 1 : 0) + (wallIssue ? 1 : 0) + (crisisFlow ? 1 : 0);
+      var normalPressure = age >= 60000 && adverseR >= .18 && evidenceCount >= 2;
+      var emergencyPressure = age >= 30000 && adverseR >= .25 && severeCrisisFlow && wallIssue;
+      if (normalPressure || emergencyPressure) s.exitPressure = (s.exitPressure || 0) + 1;
+      else s.exitPressure = Math.max(0, (s.exitPressure || 0) - 1);
+
+      if ((wallIssue || crisisFlow) && s.exitPressure === 1) {
+        addLogOnce("signal-risk-watch-" + s.createdAt, "warn", "<b>持仓风险观察</b> · 反向证据正在累积，等待持续确认而非立即失效。", 30000);
+      }
+
+      var requiredPressure = emergencyPressure ? 3 : 5;
+      if (s.exitPressure >= requiredPressure) {
+        var reason = invalidHit && wallIssue ? "结构警戒与订单墙撤退持续确认" :
+          wallIssue && crisisFlow ? (isLong ? "买墙撤退且主动砸盘持续确认" : "卖墙撤退且主动买盘持续确认") :
+          invalidHit ? "结构破坏持续确认" :
+          (isLong ? "反向主动卖盘持续确认" : "反向主动买盘持续确认");
         triggerCrisisExit(s, reason);
         return;
       }
 
-      var age = now - s.createdAt;
-      var progressR = favorable / Math.max(s.riskUnit, .0001);
-      var flowAgainst = isLong ? flow.ratio10 < -.10 : flow.ratio10 > .10;
-      if (age >= signalMaxAge(s.setup) && (progressR < .35 || flowAgainst)) {
-        finalizeSignal(s, s.tp1Hit ? "TP1后时间止盈" : "时间止损：行情未按计划展开", price, "TIME");
+      var maxAge = signalMaxAge(s.setup);
+      if (!s.tp1Hit && age >= maxAge && progressR < .20) {
+        finalizeSignal(s, "短线时间退出：行情未充分展开", price, "TIME");
+      } else if (age >= maxAge * 1.35) {
+        finalizeSignal(s, s.tp1Hit ? "TP1后短线时间止盈" : (flowAgainst ? "短线持有到期且资金流转弱" : "短线持有时间到期"), price, "TIME");
       }
     }
 
@@ -2665,6 +2699,14 @@
 
     function confidenceLabel(score) {
       return score >= 85 ? "高" : score >= 74 ? "中" : "低";
+    }
+
+    function formatSignalAge(ms) {
+      var totalSec = Math.max(0, Math.floor(ms / 1000));
+      if (totalSec < 60) return totalSec + "秒";
+      var minutes = Math.floor(totalSec / 60);
+      var seconds = totalSec % 60;
+      return minutes + "分" + String(seconds).padStart(2, "0") + "秒";
     }
 
     function renderSignal(scores, metrics, book, now) {
@@ -2706,7 +2748,7 @@
       els.invalidPrice.textContent = shown ? formatPrice(shown.invalid) : "等待信号";
       els.stopLoss.textContent = shown ? formatPrice(shown.stop) : "等待信号";
       els.runnerPrice.textContent = shown && shown.runner ? formatPrice(shown.runner) : "等待信号";
-      els.signalAge.textContent = shown ? Math.max(0, Math.floor((now - shown.createdAt) / 1000)) + "秒" : "--";
+      els.signalAge.textContent = shown ? formatSignalAge(now - shown.createdAt) : "--";
       els.levels.classList.toggle("danger", Boolean(shown && shown.crisis));
 
       var reasons = shown ? shown.reasons : (biasSide === "BUY" ? scores.longReasons : scores.shortReasons);
@@ -2734,12 +2776,15 @@
         return '<span class="condition-item ' + item.status + '">' + item.label + '</span>';
       }).join("");
 
-      var stats = performanceStats();
-      els.statSamples.textContent = String(stats.count);
-      els.statWinRate.textContent = stats.count ? stats.winRate.toFixed(1) + "%" : "--";
-      els.statWinRate.className = "mono " + (stats.count && stats.winRate >= 50 ? "positive" : stats.count ? "negative" : "neutral");
-      els.statExpectancy.textContent = stats.count ? (stats.avgR >= 0 ? "+" : "") + stats.avgR.toFixed(2) + "R" : "--";
-      els.statExpectancy.className = "mono " + signClass(stats.avgR);
+      var stats48 = performanceStats(null, 172800000, now);
+      var stats24 = performanceStats(null, 86400000, now);
+      els.statSamples.textContent = String(stats48.count);
+      els.statWinRate.textContent = stats48.count ? stats48.winRate.toFixed(1) + "%" : "--";
+      els.statWinRate.className = "mono " + (stats48.count && stats48.winRate >= 50 ? "positive" : stats48.count ? "negative" : "neutral");
+      els.statWinRate24.textContent = stats24.count ? stats24.winRate.toFixed(1) + "%" : "--";
+      els.statWinRate24.className = "mono " + (stats24.count && stats24.winRate >= 50 ? "positive" : stats24.count ? "negative" : "neutral");
+      els.statExpectancy.textContent = stats48.count ? (stats48.avgR >= 0 ? "+" : "") + stats48.avgR.toFixed(2) + "R" : "--";
+      els.statExpectancy.className = "mono " + signClass(stats48.avgR);
     }
 
     function analyze() {
@@ -2859,7 +2904,7 @@
         var flowNotional = Math.abs(c.d) * c.c;
         if (dominance < .12 || !Number.isFinite(flowNotional) || flowNotional <= 0) return;
         candidates.push({
-          t: c.t,
+          t: c.t + tfMs / 2,
           p: c.d >= 0 ? c.l : c.h,
           notional: flowNotional,
           side: c.d >= 0 ? "BUY" : "SELL",
@@ -2876,6 +2921,34 @@
         return selected.length >= maxEvents;
       });
       return selected.sort(function (a, b) { return a.t - b.t; });
+    }
+
+    function aggregateRealtimeLargeTrades(trades) {
+      var grouped = new Map();
+      trades.forEach(function (trade) {
+        if (!trade || !trade.t || !trade.notional || !trade.q || !trade.p) return;
+        var minute = Math.floor(trade.t / 60000) * 60000;
+        var key = minute + "-" + trade.side;
+        var row = grouped.get(key) || {
+          minute: minute,
+          t: minute + 30000,
+          side: trade.side,
+          q: 0,
+          notional: 0,
+          priceQty: 0,
+          count: 0,
+          source: "LIVE"
+        };
+        row.q += trade.q;
+        row.notional += trade.notional;
+        row.priceQty += trade.p * trade.q;
+        row.count += 1;
+        grouped.set(key, row);
+      });
+      return Array.from(grouped.values()).map(function (row) {
+        row.p = row.q ? row.priceQty / row.q : 0;
+        return row;
+      }).sort(function (a, b) { return a.t - b.t || (a.side === "BUY" ? -1 : 1); });
     }
 
     function drawChart() {
@@ -3079,7 +3152,7 @@
       if (shown) {
         var lineDefs = [
           { p: shown.entry, c: "#e8edf5", n: "入场" },
-          { p: shown.invalid, c: "#ff8a4c", n: "失效" },
+          { p: shown.invalid, c: "#ff8a4c", n: "警戒" },
           { p: shown.stop, c: "#ff416c", n: "SL" },
           { p: shown.target, c: "#00f5a0", n: "TP1" },
           { p: shown.runner, c: "#4c9dff", n: "Runner" }
@@ -3100,8 +3173,8 @@
       var markerTfMs = state.selectedTf * 60000;
       function markerX(ts) {
         if (!ts || ts < rows[0].t || ts >= rows[rows.length - 1].t + markerTfMs) return null;
-        var slot = Math.floor((ts - rows[0].t) / markerTfMs);
-        return leftPad + (slot + .5) * xStep;
+        var slot = (ts - rows[0].t) / markerTfMs;
+        return leftPad + slot * xStep;
       }
       function drawSignalMarker(item, active) {
         var mx = markerX(item.createdAt);
@@ -3109,17 +3182,22 @@
         var my = priceToY(item.entry);
         var buy = item.side === "BUY";
         var color = buy ? "#00f5a0" : "#ff416c";
+        var halfWidth = active ? 5 : 3.5;
+        var height = active ? 9 : 6;
+        ctx.globalAlpha = active ? 1 : .48;
         ctx.fillStyle = color;
         ctx.beginPath();
         if (buy) {
-          ctx.moveTo(mx, my - 9); ctx.lineTo(mx - 5, my + 1); ctx.lineTo(mx + 5, my + 1);
+          ctx.moveTo(mx, my - height); ctx.lineTo(mx - halfWidth, my); ctx.lineTo(mx + halfWidth, my);
         } else {
-          ctx.moveTo(mx, my + 9); ctx.lineTo(mx - 5, my - 1); ctx.lineTo(mx + 5, my - 1);
+          ctx.moveTo(mx, my + height); ctx.lineTo(mx - halfWidth, my); ctx.lineTo(mx + halfWidth, my);
         }
         ctx.closePath(); ctx.fill();
-        ctx.font = "bold 8px Cascadia Mono, Consolas, monospace";
-        ctx.fillText(active ? (buy ? "B" : "S") : ((item.resultR || 0) >= 0 ? "+R" : "-R"), mx + 7, my + 3);
-        ctx.font = "9px Cascadia Mono, Consolas, monospace";
+        if (active) {
+          ctx.font = "bold 8px Cascadia Mono, Consolas, monospace";
+          ctx.fillText(buy ? "B" : "S", mx + 7, my + 3);
+          ctx.font = "9px Cascadia Mono, Consolas, monospace";
+        }
         if (item.exitAt && item.exit && item.exit >= pMin && item.exit <= pMax) {
           var ex = markerX(item.exitAt);
           if (ex !== null) {
@@ -3128,8 +3206,30 @@
             ctx.beginPath(); ctx.arc(ex, ey, 3, 0, Math.PI * 2); ctx.stroke();
           }
         }
+        ctx.globalAlpha = 1;
       }
-      state.signalRecords.slice(0, 40).forEach(function (record) { drawSignalMarker(record, false); });
+      var signalMarkerLimit = w < 520 ? 4 : w < 900 ? 7 : 10;
+      var signalBuckets = new Set();
+      var acceptedSignalMarkers = [];
+      state.signalRecords.filter(function (record) {
+        return record && record.createdAt >= rows[0].t && record.createdAt < rows[rows.length - 1].t + markerTfMs && record.entry >= pMin && record.entry <= pMax;
+      }).sort(function (a, b) {
+        return b.createdAt - a.createdAt;
+      }).some(function (record) {
+        var bucket = Math.floor(record.createdAt / markerTfMs) * markerTfMs;
+        if (signalBuckets.has(bucket)) return false;
+        var sx = markerX(record.createdAt);
+        var sy = priceToY(record.entry);
+        var tooClose = acceptedSignalMarkers.some(function (shownMarker) {
+          return Math.hypot(sx - shownMarker.x, sy - shownMarker.y) < (w < 520 ? 28 : 18);
+        });
+        if (!tooClose) {
+          signalBuckets.add(bucket);
+          acceptedSignalMarkers.push({ record: record, x: sx, y: sy });
+        }
+        return acceptedSignalMarkers.length >= signalMarkerLimit;
+      });
+      acceptedSignalMarkers.reverse().forEach(function (marker) { drawSignalMarker(marker.record, false); });
       if (state.signal) drawSignalMarker(state.signal, true);
 
       var visibleStartTime = rows[0].t;
@@ -3191,14 +3291,15 @@
       var tradeMarkerGap = w < 520 ? 15 : w < 900 ? 11 : 8;
       var tradeDisplayFloor = w < 520 ? 150000 : w < 900 ? 100000 : 75000;
       var acceptedTradeMarkers = [];
-      (config.showLargeTrades ? state.largeTrades : []).filter(function (trade) {
+      (config.showLargeTrades ? aggregateRealtimeLargeTrades(state.largeTrades) : []).filter(function (trade) {
         return trade.t >= visibleStartTime && trade.t < visibleEndTime && trade.p >= pMin && trade.p <= pMax && trade.notional >= tradeDisplayFloor;
       }).sort(function (a, b) { return b.notional - a.notional; }).some(function (trade) {
         var tx = markerX(trade.t);
         if (tx === null) return false;
+        tx += trade.side === "BUY" ? -3 : 3;
         var ty = priceToY(trade.p);
         var overlaps = acceptedTradeMarkers.some(function (shownTrade) {
-          return Math.hypot(tx - shownTrade.x, ty - shownTrade.y) < tradeMarkerGap;
+          return shownTrade.trade.side === trade.side && Math.hypot(tx - shownTrade.x, ty - shownTrade.y) < tradeMarkerGap;
         });
         if (!overlaps) acceptedTradeMarkers.push({ trade: trade, x: tx, y: ty });
         return acceptedTradeMarkers.length >= tradeMarkerLimit;
@@ -3213,7 +3314,7 @@
         ctx.strokeStyle = buy ? "rgba(0,245,160,.9)" : "rgba(255,65,108,.9)";
         ctx.beginPath(); ctx.arc(tx, ty, radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         if (config.showLargeTradeLabels && w >= 700 && trade.notional >= 250000) {
-          drawLargeTradeLabel((buy ? "大买 $" : "大卖 $") + formatCompact(trade.notional), tx + radius, ty - 3, buy ? "#82f7ca" : "#ff91a7");
+          drawLargeTradeLabel((buy ? "大买 $" : "大卖 $") + formatCompact(trade.notional) + (trade.count > 1 ? " ×" + trade.count : ""), tx + radius, ty - 3, buy ? "#82f7ca" : "#ff91a7");
         }
       });
 
@@ -3237,14 +3338,24 @@
         var ly = marker.y;
         var longLiq = liq.side === "SELL";
         var size = clamp(4 + Math.log10(Math.max(1, liq.notional / 50000)) * 2, 4, 9);
+        ctx.globalAlpha = .30;
+        ctx.fillStyle = longLiq ? "rgba(255,65,108,.35)" : "rgba(0,245,160,.30)";
+        ctx.beginPath(); ctx.arc(lx, ly, size + 4, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
         ctx.fillStyle = longLiq ? "rgba(255,65,108,.78)" : "rgba(0,245,160,.72)";
         ctx.strokeStyle = "rgba(235,240,248,.88)";
         ctx.beginPath();
         ctx.moveTo(lx, ly - size); ctx.lineTo(lx + size, ly); ctx.lineTo(lx, ly + size); ctx.lineTo(lx - size, ly); ctx.closePath();
         ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = "rgba(255,255,255,.82)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(lx - size * .36, ly - size * .36); ctx.lineTo(lx + size * .36, ly + size * .36);
+        ctx.moveTo(lx + size * .36, ly - size * .36); ctx.lineTo(lx - size * .36, ly + size * .36);
+        ctx.stroke();
         if (w >= 560 || liq.notional >= 250000) {
           ctx.fillStyle = longLiq ? "#ff91a7" : "#82f7ca";
-          ctx.fillText((longLiq ? "多爆 $" : "空爆 $") + formatCompact(liq.notional), lx + size + 3, ly + 3);
+          ctx.fillText((longLiq ? "多头爆仓 $" : "空头爆仓 $") + formatCompact(liq.notional), lx + size + 4, ly + 3);
         }
       });
 
@@ -3288,10 +3399,36 @@
         ctx.strokeStyle = "rgba(205,213,225,.35)";
         ctx.setLineDash([3, 4]);
         ctx.beginPath(); ctx.moveTo(chart.crosshair.x, topPad); ctx.lineTo(chart.crosshair.x, h - bottomPad); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(leftPad, chart.crosshair.y); ctx.lineTo(w - rightPad, chart.crosshair.y); ctx.stroke();
+        var crossInPriceArea = chart.crosshair.y >= topPad && chart.crosshair.y <= mainBottom;
+        var crossY = clamp(chart.crosshair.y, topPad, mainBottom);
+        if (crossInPriceArea) {
+          ctx.beginPath(); ctx.moveTo(leftPad, crossY); ctx.lineTo(w - rightPad, crossY); ctx.stroke();
+        }
         ctx.setLineDash([]);
         var ci = clamp(Math.floor((chart.crosshair.x - leftPad) / xStep), 0, rows.length - 1);
         updateOhlc(rows[ci]);
+        if (crossInPriceArea) {
+          var crossPrice = pMax - (crossY - topPad) / Math.max(1, mainBottom - topPad) * (pMax - pMin);
+          var currentPrice = state.lastPrice || rows[rows.length - 1].c;
+          var crossPct = currentPrice ? (crossPrice - currentPrice) / currentPrice * 100 : 0;
+          var pctColor = Math.abs(crossPct) < .005 ? "#aab2c0" : crossPct > 0 ? "#00d88e" : "#f75b78";
+          var priceText = formatPrice(crossPrice);
+          var pctText = (crossPct >= 0 ? "+" : "") + crossPct.toFixed(2) + "%";
+          ctx.font = "bold 9px Cascadia Mono, Consolas, monospace";
+          var crossLabelW = Math.max(rightPad, ctx.measureText(priceText).width + 12, ctx.measureText(pctText).width + 12);
+          var crossLabelH = 29;
+          var crossLabelY = clamp(crossY - crossLabelH / 2, topPad, mainBottom - crossLabelH);
+          ctx.fillStyle = "rgba(29,36,48,.98)";
+          ctx.fillRect(w - crossLabelW, crossLabelY, crossLabelW, crossLabelH);
+          ctx.strokeStyle = "rgba(205,213,225,.42)";
+          ctx.strokeRect(w - crossLabelW + .5, crossLabelY + .5, crossLabelW - 1, crossLabelH - 1);
+          ctx.fillStyle = "#edf2f8";
+          ctx.fillText(priceText, w - crossLabelW + 5, crossLabelY + 11);
+          ctx.font = "8px Cascadia Mono, Consolas, monospace";
+          ctx.fillStyle = pctColor;
+          ctx.fillText(pctText, w - crossLabelW + 5, crossLabelY + 23);
+          ctx.font = "9px Cascadia Mono, Consolas, monospace";
+        }
       } else {
         updateOhlc(rows[rows.length - 1]);
       }
@@ -3532,7 +3669,7 @@
         "toolbarNote","signalPanel","mobileHandle","panelHead","panelTitle","periodTag","scoreFill","scoreValue",
         "signalState","regimeChip","setupChip","confidenceText","rrText","levels","entryPrice","takeProfit",
         "invalidPrice","stopLoss","runnerPrice","signalAge","flowValue","flowMeta","bookImbalance","bookMeta","fundingSlope","crowdingMeta","conditionList","reasonBox",
-        "statSamples","statWinRate","statExpectancy","signalLog","bookStatus","latencyText","clockText","settingsDialog","closeSettings","riskProfile",
+        "statSamples","statWinRate","statWinRate24","statExpectancy","signalLog","bookStatus","latencyText","clockText","settingsDialog","closeSettings","riskProfile",
         "bookBinInput","wallFloorInput","megaWallInput","signalThresholdInput","costPctInput","largeTradesSelect","historicalLargeTradesSelect","largeTradeLabelsSelect","autoScrollSelect","resetSettings","saveSettings"
       ].forEach(function (id) { els[id] = $(id); });
     }
